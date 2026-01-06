@@ -1,0 +1,52 @@
+{
+  "_fixture_metadata": {
+    "description": "Golden response fixture for Jupiter quote API - high price impact scenario",
+    "api_version": "v6",
+    "endpoint": "GET /quote",
+    "captured_at": "2026-01-06",
+    "immutable": true,
+    "update_requires": "explicit commit with justification for contract change",
+    "scenario": "Large trade with significant price impact for testing risk checks",
+    "schema_notes": "2026-01-06: Removed feeAmount and feeMint from swapInfo objects - no longer returned by live API"
+  },
+  "_request_params": {
+    "inputMint": "So11111111111111111111111111111111111111112",
+    "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "amount": "100000000000",
+    "slippageBps": "300"
+  },
+  "inputMint": "So11111111111111111111111111111111111111112",
+  "inAmount": "100000000000",
+  "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "outAmount": "13245678901",
+  "otherAmountThreshold": "12848408614",
+  "swapMode": "ExactIn",
+  "slippageBps": 300,
+  "priceImpactPct": "2.847",
+  "routePlan": [
+    {
+      "swapInfo": {
+        "ammKey": "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2",
+        "label": "Raydium CLMM",
+        "inputMint": "So11111111111111111111111111111111111111112",
+        "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "inAmount": "60000000000",
+        "outAmount": "7987654321"
+      },
+      "percent": 60
+    },
+    {
+      "swapInfo": {
+        "ammKey": "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crLCEgFbM8",
+        "label": "Orca Whirlpool",
+        "inputMint": "So11111111111111111111111111111111111111112",
+        "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "inAmount": "40000000000",
+        "outAmount": "5258024580"
+      },
+      "percent": 40
+    }
+  ],
+  "contextSlot": 391625890,
+  "timeTaken": 0.023456789
+}

@@ -1,0 +1,46 @@
+{
+  "_fixture_metadata": {
+    "description": "Golden response fixture for Jupiter quote API - SOL to USDC swap",
+    "api_version": "v6",
+    "endpoint": "GET /quote",
+    "captured_at": "2026-01-06",
+    "immutable": true,
+    "update_requires": "explicit commit with justification for contract change",
+    "schema_notes": "2026-01-06: Removed feeAmount and feeMint from swapInfo objects - no longer returned by live API"
+  },
+  "_request_params": {
+    "inputMint": "So11111111111111111111111111111111111111112",
+    "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "amount": "1000000",
+    "slippageBps": "50",
+    "platformFeeBps": "20"
+  },
+  "inputMint": "So11111111111111111111111111111111111111112",
+  "inAmount": "1000000",
+  "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "outAmount": "138082",
+  "otherAmountThreshold": "137392",
+  "swapMode": "ExactIn",
+  "slippageBps": 50,
+  "platformFee": {
+    "amount": "276",
+    "feeBps": 20
+  },
+  "priceImpactPct": "0.000012",
+  "routePlan": [
+    {
+      "swapInfo": {
+        "ammKey": "65ZHSArs5XxPseKQbB1B4r16vDxMWnCxHMzogDAqiDUc",
+        "label": "SolFi V2",
+        "inputMint": "So11111111111111111111111111111111111111112",
+        "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "inAmount": "1000000",
+        "outAmount": "138358"
+      },
+      "percent": 100
+    }
+  ],
+  "contextSlot": 391615977,
+  "timeTaken": 0.002198393,
+  "swapUsdValue": "0.138347711073090700593362265"
+}

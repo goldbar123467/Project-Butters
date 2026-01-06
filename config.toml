@@ -1,0 +1,107 @@
+# Butters - Mean Reversion Trading Bot Configuration
+# Kyzo-Dex Project
+
+[strategy]
+# Lookback period for rolling mean/std calculation (in candles)
+lookback_period = 20
+
+# Z-score threshold for entry (2.0 = moderate, 2.5 = conservative)
+z_threshold = 2.0
+
+# Exit at mean (0.0) or slight overshoot (0.5)
+z_exit_threshold = 0.0
+
+# Minimum volume percentile to trade (filter low-liquidity moments)
+min_volume_percentile = 60
+
+# Maximum spread in basis points (0.3% = 30 bps)
+max_spread_bps = 30
+
+# Cooldown between trades in seconds
+cooldown_seconds = 300
+
+# Timeframe for candles ("4h" or "1d")
+timeframe = "4h"
+
+[risk]
+# Maximum position size as percentage of portfolio
+max_position_pct = 5.0
+
+# Stop loss percentage
+stop_loss_pct = 2.5
+
+# Take profit percentage (exit at mean reversion)
+take_profit_pct = 1.5
+
+# Maximum trades per day
+max_daily_trades = 10
+
+# Maximum daily loss percentage (circuit breaker)
+max_daily_loss_pct = 3.0
+
+# Time-based stop (exit after N hours if no movement)
+time_stop_hours = 24
+
+[tokens]
+# SOL mint address
+base_mint = "So11111111111111111111111111111111111111112"
+
+# USDC mint address
+quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+# Trading pair symbol (for logging)
+pair_symbol = "SOL/USDC"
+
+[jupiter]
+# Jupiter V6 API base URL
+api_url = "https://public.jupiterapi.com"
+
+# API key for higher rate limits (get from https://portal.jup.ag)
+# Set via JUPITER_API_KEY environment variable in .env file
+api_key = ""
+
+# Slippage tolerance in basis points (0.5% = 50 bps)
+slippage_bps = 50
+
+# Restrict intermediate tokens to high-liquidity paths
+restrict_intermediate_tokens = true
+
+# Priority fee mode: "auto", "high", "veryHigh"
+priority_level = "high"
+
+# Maximum priority fee in lamports (0.005 SOL cap)
+max_priority_fee_lamports = 5000000
+
+# Use dynamic compute unit limits
+dynamic_compute_units = true
+
+[solana]
+# RPC endpoint - Set via SOLANA_RPC_URL environment variable in .env file
+# Helius provides dedicated RPC with higher rate limits
+rpc_url = "https://api.mainnet-beta.solana.com"
+
+# Commitment level: "processed", "confirmed", "finalized"
+commitment = "confirmed"
+
+# Wallet keypair path (NEVER commit this file!)
+keypair_path = "~/.config/solana/id.json"
+
+[logging]
+# Log level: "trace", "debug", "info", "warn", "error"
+level = "info"
+
+# Log to file (in addition to stdout)
+log_to_file = true
+
+# Log file path
+log_file = "logs/butters.log"
+
+[alerts]
+# Enable Discord webhook notifications
+discord_enabled = false
+discord_webhook_url = ""
+
+# Enable Telegram notifications
+telegram_enabled = false
+telegram_bot_token = ""
+telegram_chat_id = ""
