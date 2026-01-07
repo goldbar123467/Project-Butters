@@ -14,6 +14,9 @@ use clap::Parser;
 use tracing_subscriber::{fmt, EnvFilter};
 use std::path::Path;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use crate::adapters::cli::{CliApp, Command, RunCmd, StatusCmd, QuoteCmd, SwapCmd, BacktestCmd};
 use crate::adapters::jito::{JitoBundleClient, JitoConfig, JitoExecutionAdapter};
 use crate::adapters::jupiter::JupiterClient;
@@ -44,12 +47,79 @@ fn init_logging(verbose: bool, debug: bool) -> Result<()> {
     let filter = if debug {
         EnvFilter::new("debug")
     } else if verbose {
-        EnvFilter::new("info")
+        EnvFilter::new("trace")
     } else {
-        EnvFilter::new("warn")
+        EnvFilter::new("info")
     };
 
     fmt().with_env_filter(filter).init();
+    Ok(())
+}
+
+/// Preflight safety checks for live mainnet trading
+///
+/// These checks help prevent accidental loss of funds by ensuring:
+/// 1. Keypair file has secure permissions (Unix: 600 or stricter)
+/// 2. Not using devnet RPC for live trading
+/// 3. Jito MEV protection is enabled (warning if disabled)
+async fn preflight_checks(config: &config::Config, keypair_path: &str) -> Result<()> {
+    tracing::info!("Running preflight safety checks for live trading...");
+
+    // 1. Check keypair file permissions (Unix only)
+    #[cfg(unix)]
+    {
+        let metadata = std::fs::metadata(keypair_path)
+            .context(format!("Cannot access keypair file: {}", keypair_path))?;
+        let mode = metadata.permissions().mode();
+        // Check if group or other permissions are set (should be 0)
+        if mode & 0o077 != 0 {
+            bail!(
+                "SECURITY ERROR: Keypair file has unsafe permissions: {:o}\n\
+                 \n\
+                 The keypair file '{}' is readable by other users.\n\
+                 For live trading, this file must have permissions 600 or stricter.\n\
+                 \n\
+                 Fix with: chmod 600 {}",
+                mode & 0o777,
+                keypair_path,
+                keypair_path
+            );
+        }
+        tracing::info!("Keypair permissions: {:o} (OK)", mode & 0o777);
+    }
+
+    // 2. Check not devnet
+    if config.solana.rpc_url.contains("devnet") {
+        bail!(
+            "CONFIGURATION ERROR: Cannot use --live with devnet RPC.\n\
+             \n\
+             Your config specifies a devnet RPC URL: {}\n\
+             Live trading requires a mainnet RPC endpoint.\n\
+             \n\
+             Update your config.toml to use a mainnet RPC URL.",
+            config.solana.rpc_url
+        );
+    }
+    tracing::info!("RPC endpoint: {} (mainnet)", config.solana.rpc_url);
+
+    // 3. Warn if Jito MEV protection is disabled
+    if !config.jito.enabled {
+        tracing::warn!("==================================================");
+        tracing::warn!("WARNING: Jito MEV protection is DISABLED on mainnet!");
+        tracing::warn!("Your trades may be frontrun by MEV bots.");
+        tracing::warn!("Consider enabling Jito bundles in your config.toml:");
+        tracing::warn!("  [jito]");
+        tracing::warn!("  enabled = true");
+        tracing::warn!("==================================================");
+    } else {
+        tracing::info!("Jito MEV protection: ENABLED (region: {})", config.jito.region);
+    }
+
+    // 4. Log minimum balance recommendation
+    tracing::info!("Recommended minimum balance: 0.05 SOL (50,000,000 lamports)");
+    tracing::info!("This covers transaction fees and Jito tips for multiple trades.");
+
+    tracing::info!("Preflight checks PASSED for live trading");
     Ok(())
 }
 
@@ -60,13 +130,46 @@ async fn run_command(cmd: RunCmd) -> Result<()> {
     let config = load_config(&cmd.config)
         .context("Failed to load configuration")?;
 
+    // Expand keypair path (handles ~ for home directory)
+    let keypair_path = shellexpand::tilde(&config.solana.keypair_path).to_string();
+
+    // Check for conflicting flags
+    if cmd.live && cmd.paper {
+        bail!(
+            "Conflicting flags: --live and --paper cannot be used together.\n\
+             Use --paper for simulation or --live for real trading."
+        );
+    }
+
+    // Preflight checks for live trading
+    if cmd.live {
+        if !cmd.i_accept_losses {
+            bail!(
+                "LIVE TRADING SAFEGUARD\n\
+                 \n\
+                 Live trading on mainnet involves real financial risk.\n\
+                 You could lose some or all of your funds.\n\
+                 \n\
+                 To proceed with live trading, you must acknowledge this risk:\n\
+                 \n\
+                 ./target/release/butters run --live --i-accept-losses\n\
+                 \n\
+                 For simulation without risk, use: --paper"
+            );
+        }
+
+        tracing::warn!("==========================================");
+        tracing::warn!("  LIVE TRADING MODE - REAL FUNDS AT RISK");
+        tracing::warn!("==========================================");
+
+        // Run preflight safety checks
+        preflight_checks(&config, &keypair_path).await?;
+    }
+
     // Build components
     let jupiter = JupiterClient::new()
         .context("Failed to create Jupiter client")?;
     let solana = SolanaClient::new(config.solana.rpc_url.clone());
-
-    // Expand keypair path (handles ~ for home directory)
-    let keypair_path = shellexpand::tilde(&config.solana.keypair_path).to_string();
 
     // Load wallet with improved error handling
     let wallet = match load_wallet_with_context(&keypair_path, cmd.paper) {

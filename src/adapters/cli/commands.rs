@@ -60,6 +60,14 @@ pub struct RunCmd {
     #[arg(short, long)]
     pub paper: bool,
 
+    /// Enable live mainnet trading (requires --i-accept-losses)
+    #[arg(long, help = "Enable live mainnet trading")]
+    pub live: bool,
+
+    /// Acknowledge risk of financial loss (required for --live)
+    #[arg(long, help = "Acknowledge risk of financial loss")]
+    pub i_accept_losses: bool,
+
     /// Override RPC URL
     #[arg(long, value_name = "URL")]
     pub rpc_url: Option<String>,
@@ -399,6 +407,38 @@ mod tests {
         match app.command {
             Command::Run(cmd) => {
                 assert!(cmd.paper);
+                assert!(!cmd.live);
+                assert!(!cmd.i_accept_losses);
+            }
+            _ => panic!("Expected Run command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_app_parse_run_with_live() {
+        let args = vec!["butters", "run", "--live", "--i-accept-losses"];
+        let app = CliApp::try_parse_from(args).unwrap();
+
+        match app.command {
+            Command::Run(cmd) => {
+                assert!(cmd.live);
+                assert!(cmd.i_accept_losses);
+                assert!(!cmd.paper);
+            }
+            _ => panic!("Expected Run command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_app_parse_run_live_without_accept() {
+        // This parses successfully, but the runtime check should fail
+        let args = vec!["butters", "run", "--live"];
+        let app = CliApp::try_parse_from(args).unwrap();
+
+        match app.command {
+            Command::Run(cmd) => {
+                assert!(cmd.live);
+                assert!(!cmd.i_accept_losses);
             }
             _ => panic!("Expected Run command"),
         }

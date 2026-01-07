@@ -109,7 +109,6 @@ impl TradingOrchestrator {
     pub async fn tick(&self) -> Result<(), OrchestratorError> {
         // 1. Fetch current price (use Jupiter quote for now)
         let price = self.fetch_price().await?;
-        tracing::debug!("Current price: {}", price);
 
         // 2. Update strategy
         let mut strategy = self.strategy.write().await;
@@ -122,11 +121,21 @@ impl TradingOrchestrator {
                     self.execute_trade(&action, price).await?;
                 }
                 TradeAction::Hold => {
-                    tracing::trace!("Action: Hold");
+                    // Get z-score for display
+                    let z_score = strategy.current_zscore()
+                        .map(|z| z.z_score)
+                        .unwrap_or(0.0);
+                    tracing::info!(
+                        "SOL ${:.2} | Z-score: {:.2} | Action: HOLD",
+                        price, z_score
+                    );
                 }
             }
         } else {
-            tracing::trace!("Strategy not ready yet (warming up)");
+            tracing::info!(
+                "SOL ${:.2} | Warming up...",
+                price
+            );
         }
 
         Ok(())

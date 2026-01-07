@@ -84,7 +84,7 @@ rpc_url = "https://api.mainnet-beta.solana.com"
 commitment = "confirmed"
 
 # Wallet keypair path (NEVER commit this file!)
-keypair_path = "~/.config/solana/id.json"
+keypair_path = "/opt/solana/wallets/trading/id.json"
 
 [logging]
 # Log level: "trace", "debug", "info", "warn", "error"

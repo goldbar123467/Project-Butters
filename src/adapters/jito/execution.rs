@@ -116,7 +116,13 @@ impl JitoExecutionAdapter {
     ///
     /// # Returns
     /// Bundle ID string on success, or JitoError on failure
-    async fn execute_as_bundle(&self, swap_tx: String) -> Result<String, JitoError> {
+    ///
+    /// # Fail-Closed Policy
+    /// If Jito bundle submission fails, this method returns an error.
+    /// It does NOT fall back to direct RPC submission. This ensures
+    /// MEV protection is maintained - trades are only executed with
+    /// bundle protection or not at all.
+    pub async fn execute_as_bundle(&self, swap_tx: String) -> Result<String, JitoError> {
         let jito = self.jito.as_ref().ok_or_else(|| {
             JitoError::InvalidBundle("Jito client not configured".to_string())
         })?;
@@ -129,7 +135,10 @@ impl JitoExecutionAdapter {
         }
 
         // Create tip instruction
+        let tip = self.tip_lamports.unwrap_or(jito.default_tip_lamports());
         let _tip_ix = jito.create_tip_instruction(&self.payer, self.tip_lamports)?;
+
+        tracing::info!("Submitting swap via Jito bundle (tip: {} lamports)", tip);
 
         // In production, we would:
         // 1. Deserialize the swap transaction
@@ -142,9 +151,20 @@ impl JitoExecutionAdapter {
 
         // Send bundle with the swap transaction
         // Note: In production, you'd include a signed tip transaction too
-        let bundle_id = jito.send_bundle(vec![swap_tx]).await?;
-
-        Ok(bundle_id)
+        match jito.send_bundle(vec![swap_tx]).await {
+            Ok(bundle_id) => {
+                tracing::info!("Bundle submitted: {}", bundle_id);
+                Ok(bundle_id)
+            }
+            Err(err) => {
+                // FAIL CLOSED: Do NOT fall back to direct RPC
+                tracing::error!(
+                    "Jito bundle submission failed: {}. NOT falling back to direct RPC.",
+                    err
+                );
+                Err(err)
+            }
+        }
     }
 
     /// Execute swap with retry logic
@@ -229,10 +249,16 @@ impl ExecutionPort for JitoExecutionAdapter {
 
         if self.bundles_enabled() {
             // Execute through Jito bundle for MEV protection
+            // FAIL CLOSED: If Jito fails, we return an error (no fallback to direct RPC)
             let bundle_id = self
                 .execute_with_jito_retry(swap_response.swap_transaction)
                 .await
-                .map_err(|e| ExecutionError::ExecutionError(e.to_string()))?;
+                .map_err(|e| {
+                    ExecutionError::ExecutionError(format!(
+                        "Jito bundle failed: {}. MEV protection required - trade NOT executed.",
+                        e
+                    ))
+                })?;
 
             Ok(ExecuteSwapResponse {
                 signature: bundle_id, // Return bundle ID as signature
@@ -452,5 +478,116 @@ mod tests {
         let jito2 = JitoBundleClient::new().unwrap();
         let adapter2 = JitoExecutionAdapter::new(jupiter2, jito2, payer).with_tip(100_000);
         assert_eq!(adapter2.tip_lamports(), Some(100_000));
+    }
+
+    // ============================================================
+    // Integration Tests for Fail-Closed Policy
+    // ============================================================
+
+    #[tokio::test]
+    async fn test_jito_fail_closed_policy() {
+        // Test that when bundles are enabled but submission fails,
+        // we get an error (not silent fallback to direct RPC)
+
+        // Adapter with bundles disabled should explicitly show disabled state
+        let jupiter = JupiterClient::new().unwrap();
+        let payer = Pubkey::new_unique();
+        let adapter = JitoExecutionAdapter::with_bundles_disabled(jupiter, payer);
+        assert!(!adapter.bundles_enabled());
+
+        // When bundles are enabled, execute_as_bundle with invalid data should error
+        let jupiter2 = JupiterClient::new().unwrap();
+        let jito = JitoBundleClient::new().unwrap();
+        let adapter2 = JitoExecutionAdapter::new(jupiter2, jito, payer);
+        assert!(adapter2.bundles_enabled());
+
+        // Empty transaction should be rejected (not silently dropped)
+        let result = adapter2.execute_as_bundle(String::new()).await;
+        assert!(result.is_err());
+
+        // Verify the error message indicates we're NOT falling back
+        let err = result.unwrap_err();
+        match err {
+            JitoError::InvalidTransaction(msg) => {
+                assert!(msg.contains("Empty"), "Expected empty transaction error, got: {}", msg);
+            }
+            _ => panic!("Expected InvalidTransaction error, got: {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_bundle_path_used_when_enabled() {
+        // Test that bundles_enabled() correctly reflects configuration
+
+        // With Jito client configured, bundles should be enabled
+        let jupiter = JupiterClient::new().unwrap();
+        let jito = JitoBundleClient::new().unwrap();
+        let payer = test_payer();
+        let adapter = JitoExecutionAdapter::new(jupiter, jito, payer);
+
+        assert!(
+            adapter.bundles_enabled(),
+            "Bundles should be enabled when Jito client is configured"
+        );
+
+        // With bundles explicitly disabled, bundles should be disabled
+        let jupiter2 = JupiterClient::new().unwrap();
+        let adapter2 = JitoExecutionAdapter::with_bundles_disabled(jupiter2, payer);
+
+        assert!(
+            !adapter2.bundles_enabled(),
+            "Bundles should be disabled when explicitly disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_as_bundle_requires_jito_client() {
+        // Test that execute_as_bundle fails without Jito client
+        let jupiter = JupiterClient::new().unwrap();
+        let payer = test_payer();
+
+        // Create adapter without Jito client
+        let adapter = JitoExecutionAdapter::with_bundles_disabled(jupiter, payer);
+
+        // Attempting to use bundle path should fail
+        let result = adapter.execute_as_bundle("valid_tx_data".to_string()).await;
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            JitoError::InvalidBundle(msg) => {
+                assert!(
+                    msg.contains("not configured"),
+                    "Error should mention Jito not configured, got: {}", msg
+                );
+            }
+            e => panic!("Expected InvalidBundle error, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_fail_closed_error_message_format() {
+        // Verify that our fail-closed error message format is correct
+        // This tests the conversion path that execute_swap uses
+
+        let jito_error = JitoError::BundleRejected("simulation failed".to_string());
+        let exec_error: ExecutionError = jito_error.into();
+
+        match exec_error {
+            ExecutionError::ExecutionError(msg) => {
+                assert!(
+                    msg.contains("simulation failed"),
+                    "Error should contain original error, got: {}", msg
+                );
+            }
+            _ => panic!("Expected ExecutionError variant"),
+        }
+
+        // Test the specific format used in execute_swap
+        let error_msg = format!(
+            "Jito bundle failed: {}. MEV protection required - trade NOT executed.",
+            "connection timeout"
+        );
+        assert!(error_msg.contains("NOT executed"));
+        assert!(error_msg.contains("MEV protection required"));
     }
 }

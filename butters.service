@@ -1,0 +1,35 @@
+[Unit]
+Description=Butters Trading Bot - Mean Reversion DEX Strategy
+Documentation=https://github.com/kyzlo/kyzlo-dex
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/projects/kyzlo-dex
+ExecStart=/home/ubuntu/projects/kyzlo-dex/target/release/butters run --config config.toml --live --i-accept-losses
+
+# Restart configuration
+Restart=on-failure
+RestartSec=30
+
+# Logging to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=butters
+
+# Environment
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/projects/kyzlo-dex
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
