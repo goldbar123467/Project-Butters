@@ -58,6 +58,10 @@ impl QuoteRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuoteResponse {
+    /// Input token mint address
+    pub input_mint: String,
+    /// Output token mint address
+    pub output_mint: String,
     /// Input amount in base units
     pub in_amount: String,
     /// Output amount in base units
@@ -79,6 +83,9 @@ pub struct QuoteResponse {
     /// Time taken in milliseconds
     #[serde(default)]
     pub time_taken: Option<f64>,
+    /// Catch-all for any additional fields from API (prevents future field loss)
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 impl QuoteResponse {
@@ -178,6 +185,8 @@ mod tests {
     #[test]
     fn test_quote_response_parsing() {
         let json = r#"{
+            "inputMint": "So11111111111111111111111111111111111111112",
+            "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
             "inAmount": "1000000000",
             "outAmount": "150000000",
             "otherAmountThreshold": "149250000",
