@@ -196,6 +196,44 @@ cargo run --release -- run
 
 **Never commit your mainnet keypair to git. Keep it secure.**
 
+### Step 7: Production Deployment (tmux)
+
+For persistent operation that survives SSH disconnects:
+
+```bash
+# One-command startup
+./start.sh
+```
+
+**Output:**
+```
+✓ Butters started in tmux session 'ironwatch'
+
+  Attach:  tmux attach -t ironwatch
+  Detach:  Ctrl+B, D
+```
+
+**Managing the bot:**
+
+| Command | Description |
+|---------|-------------|
+| `./start.sh` | Start bot in tmux (kills existing first) |
+| `tmux attach -t ironwatch` | View live output |
+| `Ctrl+B, D` | Detach (bot keeps running) |
+| `tmux kill-session -t ironwatch` | Stop the bot |
+
+**Monitoring scripts:**
+
+```bash
+# Watch for auto-restart and alerts
+./scripts/ironwatch-monitor.sh
+
+# View logs
+tail -f logs/butters.log
+```
+
+The bot will continue running after you disconnect from SSH.
+
 ---
 
 ## Installation
