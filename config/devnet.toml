@@ -106,3 +106,10 @@ discord_webhook_url = ""
 telegram_enabled = false
 telegram_bot_token = ""
 telegram_chat_id = ""
+
+[jito]
+# Disable Jito on devnet (no block engines for devnet)
+enabled = false
+region = "ny"
+tip_lamports = 10000
+# api_token = ""

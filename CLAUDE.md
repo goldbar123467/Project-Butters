@@ -284,7 +284,15 @@ quote = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" # USDC
 - **17 orchestrator tests passing** ✓
 - **107 total tests passing** ✓
 
-### 🚀 Phase 6: Integration & Testing (NEXT)
+### 🔄 Phase 6: Jito Integration (IN PROGRESS)
+- `src/adapters/jito/mod.rs` - Jito module exports
+- `src/adapters/jito/client.rs` - JitoBundleClient for MEV-protected bundles (in progress)
+- `src/adapters/jito/config.rs` - JitoConfig with tip settings
+- `src/adapters/jito/error.rs` - JitoError type definitions
+- `src/adapters/jito/types.rs` - BundleRequest, BundleResponse, BundleStatus types
+- **Purpose**: MEV protection via Jito Block Engine bundle submission
+
+### 🚀 Phase 7: Integration & Testing (NEXT)
 - Integration tests with devnet
 - Paper trading mode testing
 - Mainnet deployment preparation
@@ -334,9 +342,15 @@ src/
 │   ├── cli/
 │   │   ├── mod.rs
 │   │   └── commands.rs         # CliApp with clap derive
-│   └── market_data/
-│       ├── mod.rs
-│       └── jupiter_price.rs    # Jupiter price API client
+│   ├── market_data/
+│   │   ├── mod.rs
+│   │   └── jupiter_price.rs    # Jupiter price API client
+│   └── jito/
+│       ├── mod.rs              # Jito module exports
+│       ├── client.rs           # JitoBundleClient implementation
+│       ├── config.rs           # JitoConfig settings
+│       ├── error.rs            # JitoError types
+│       └── types.rs            # Bundle request/response types
 analysis/
 └── jupiter_api.md              # Jupiter API notes
 docs/

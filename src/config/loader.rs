@@ -17,6 +17,8 @@ pub struct Config {
     pub logging: LoggingSection,
     #[serde(default)]
     pub alerts: AlertsSection,
+    #[serde(default)]
+    pub jito: JitoSection,
 }
 
 /// Strategy configuration section
@@ -140,6 +142,30 @@ pub struct AlertsSection {
     /// Telegram chat ID
     #[serde(default)]
     pub telegram_chat_id: String,
+}
+
+/// Jito configuration section for MEV protection
+#[derive(Debug, Clone, Deserialize)]
+pub struct JitoSection {
+    /// Enable Jito bundles for MEV protection
+    pub enabled: bool,
+    /// Block engine region: "ny", "amsterdam", "frankfurt", "tokyo"
+    pub region: String,
+    /// Tip amount in lamports (default 10000 = 0.00001 SOL)
+    pub tip_lamports: u64,
+    /// API token (optional)
+    pub api_token: Option<String>,
+}
+
+impl Default for JitoSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            region: "ny".to_string(),
+            tip_lamports: 10_000,
+            api_token: None,
+        }
+    }
 }
 
 /// Configuration errors
@@ -603,5 +629,121 @@ log_file = "logs/butters.log"
         let config = load_config(file.path()).unwrap();
         assert!(!config.alerts.discord_enabled);
         assert!(!config.alerts.telegram_enabled);
+    }
+
+    #[test]
+    fn test_jito_section_parsing() {
+        let config_with_jito = r#"
+[strategy]
+lookback_period = 20
+z_threshold = 2.0
+z_exit_threshold = 0.0
+min_volume_percentile = 60.0
+max_spread_bps = 30
+cooldown_seconds = 300
+timeframe = "4h"
+
+[risk]
+max_position_pct = 5.0
+stop_loss_pct = 2.5
+take_profit_pct = 1.5
+max_daily_trades = 10
+max_daily_loss_pct = 3.0
+time_stop_hours = 24
+
+[tokens]
+base_mint = "So11111111111111111111111111111111111111112"
+quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+pair_symbol = "SOL/USDC"
+
+[jupiter]
+api_url = "https://public.jupiterapi.com"
+slippage_bps = 50
+restrict_intermediate_tokens = true
+priority_level = "high"
+max_priority_fee_lamports = 5000000
+dynamic_compute_units = true
+
+[solana]
+rpc_url = "https://api.mainnet-beta.solana.com"
+commitment = "confirmed"
+keypair_path = "~/.config/solana/id.json"
+
+[logging]
+level = "info"
+log_to_file = true
+log_file = "logs/butters.log"
+
+[jito]
+enabled = true
+region = "amsterdam"
+tip_lamports = 25000
+api_token = "test-token"
+"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_with_jito.as_bytes()).unwrap();
+
+        let config = load_config(file.path()).unwrap();
+        assert!(config.jito.enabled);
+        assert_eq!(config.jito.region, "amsterdam");
+        assert_eq!(config.jito.tip_lamports, 25000);
+        assert_eq!(config.jito.api_token, Some("test-token".to_string()));
+    }
+
+    #[test]
+    fn test_jito_section_optional_defaults() {
+        // Config without jito section - should use defaults
+        let config_without_jito = r#"
+[strategy]
+lookback_period = 20
+z_threshold = 2.0
+z_exit_threshold = 0.0
+min_volume_percentile = 60.0
+max_spread_bps = 30
+cooldown_seconds = 300
+timeframe = "4h"
+
+[risk]
+max_position_pct = 5.0
+stop_loss_pct = 2.5
+take_profit_pct = 1.5
+max_daily_trades = 10
+max_daily_loss_pct = 3.0
+time_stop_hours = 24
+
+[tokens]
+base_mint = "So11111111111111111111111111111111111111112"
+quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+pair_symbol = "SOL/USDC"
+
+[jupiter]
+api_url = "https://public.jupiterapi.com"
+slippage_bps = 50
+restrict_intermediate_tokens = true
+priority_level = "high"
+max_priority_fee_lamports = 5000000
+dynamic_compute_units = true
+
+[solana]
+rpc_url = "https://api.mainnet-beta.solana.com"
+commitment = "confirmed"
+keypair_path = "~/.config/solana/id.json"
+
+[logging]
+level = "info"
+log_to_file = true
+log_file = "logs/butters.log"
+"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_without_jito.as_bytes()).unwrap();
+
+        let config = load_config(file.path()).unwrap();
+        // Should use default values
+        assert!(config.jito.enabled);
+        assert_eq!(config.jito.region, "ny");
+        assert_eq!(config.jito.tip_lamports, 10_000);
+        assert_eq!(config.jito.api_token, None);
     }
 }

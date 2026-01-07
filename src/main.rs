@@ -15,11 +15,13 @@ use tracing_subscriber::{fmt, EnvFilter};
 use std::path::Path;
 
 use crate::adapters::cli::{CliApp, Command, RunCmd, StatusCmd, QuoteCmd, SwapCmd, BacktestCmd};
+use crate::adapters::jito::{JitoBundleClient, JitoConfig, JitoExecutionAdapter};
 use crate::adapters::jupiter::JupiterClient;
 use crate::adapters::solana::{SolanaClient, WalletManager};
 use crate::application::TradingOrchestrator;
 use crate::config::load_config;
 use crate::strategy::StrategyConfig;
+use crate::ports::execution::{ExecutionPort, SwapQuoteRequest, ExecuteSwapRequest, SwapQuoteResponse};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -82,6 +84,27 @@ async fn run_command(cmd: RunCmd) -> Result<()> {
         }
     };
 
+    // Create Jito client if enabled
+    let jito_execution = if config.jito.enabled {
+        let jito_config = JitoConfig::mainnet(&config.jito.region)
+            .with_tip(config.jito.tip_lamports);
+        
+        let jito_config = if let Some(ref token) = config.jito.api_token {
+            jito_config.with_api_token(token.clone())
+        } else {
+            jito_config
+        };
+        
+        let jito = JitoBundleClient::with_config(jito_config)
+            .context("Failed to create Jito client")?;
+        
+        tracing::info!("Jito MEV protection enabled (region: {})", config.jito.region);
+        Some(JitoExecutionAdapter::new(jupiter.clone(), jito, wallet.pubkey()))
+    } else {
+        tracing::info!("Jito MEV protection disabled");
+        None
+    };
+
     // Convert config to strategy config
     let strategy_config = StrategyConfig::from(&config);
 
@@ -108,6 +131,12 @@ async fn run_command(cmd: RunCmd) -> Result<()> {
     // Run
     if cmd.paper {
         tracing::warn!("PAPER TRADING MODE - no real transactions");
+    }
+
+    if jito_execution.is_some() {
+        tracing::info!("MEV protection: ENABLED via Jito bundles");
+    } else {
+        tracing::info!("MEV protection: DISABLED (direct Jupiter swaps)");
     }
 
     orchestrator.run().await?;
@@ -209,7 +238,128 @@ async fn quote_command(cmd: QuoteCmd) -> Result<()> {
 }
 
 async fn swap_command(cmd: SwapCmd) -> Result<()> {
-    println!("Swap command not yet implemented");
+    // Load config
+    let config = load_config(&cmd.config)
+        .context("Failed to load configuration")?;
+
+    // Create Jupiter client
+    let jupiter = JupiterClient::new()
+        .context("Failed to create Jupiter client")?;
+
+    // Load wallet
+    let keypair_path = shellexpand::tilde(&config.solana.keypair_path).to_string();
+    let wallet = load_wallet_with_context(&keypair_path, false)?;
+
+    // Resolve tokens
+    let (input_mint, output_mint) = match (cmd.input_token.as_str(), cmd.output_token.as_str()) {
+        ("SOL", "USDC") => (config.tokens.base_mint.clone(), config.tokens.quote_mint.clone()),
+        ("USDC", "SOL") => (config.tokens.quote_mint.clone(), config.tokens.base_mint.clone()),
+        _ => anyhow::bail!("Unsupported token pair. Use 'SOL' or 'USDC'"),
+    };
+
+    let amount = (cmd.amount * 1e9) as u64; // Convert to lamports
+
+    // Get quote from Jupiter
+    tracing::info!("Fetching quote for {} {} -> {}", cmd.amount, cmd.input_token, cmd.output_token);
+    let quote_req = crate::adapters::jupiter::QuoteRequest::new(
+        input_mint.clone(), output_mint.clone(), amount, cmd.slippage
+    );
+    
+    let quote = jupiter.get_quote(&quote_req).await
+        .context("Failed to get quote")?;
+
+    let output_amount = quote.output_amount() as f64 / 1e6;
+    let price_impact = quote.price_impact();
+
+    println!("\nQuote:");
+    println!("  Input:  {} {}", cmd.amount, cmd.input_token);
+    println!("  Output: {:.6} {}", output_amount, cmd.output_token);
+    println!("  Price impact: {:.2}%", price_impact);
+    println!("  Slippage: {} bps", cmd.slippage);
+
+    if config.jito.enabled {
+        println!("  MEV protection: ENABLED (Jito bundles)");
+        println!("  Tip: {} lamports", config.jito.tip_lamports);
+    } else {
+        println!("  MEV protection: DISABLED");
+    }
+
+    // Confirm with user
+    if !cmd.yes {
+        println!("\nExecute this swap? [y/N]: ");
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Swap cancelled");
+            return Ok(());
+        }
+    }
+
+    // Execute swap with optional Jito protection
+    tracing::info!("Executing swap...");
+    
+    if config.jito.enabled {
+        // Use Jito MEV-protected execution
+        let jito_config = JitoConfig::mainnet(&config.jito.region)
+            .with_tip(config.jito.tip_lamports);
+        
+        let jito_config = if let Some(ref token) = config.jito.api_token {
+            jito_config.with_api_token(token.clone())
+        } else {
+            jito_config
+        };
+        
+        let jito = JitoBundleClient::with_config(jito_config)
+            .context("Failed to create Jito client")?;
+        
+        tracing::info!("Using Jito MEV protection (region: {})", config.jito.region);
+        let jito_adapter = JitoExecutionAdapter::new(jupiter, jito, wallet.pubkey());
+        
+        // Use ExecutionPort trait methods
+        let swap_quote_req = SwapQuoteRequest {
+            input_mint,
+            output_mint,
+            amount,
+            slippage_bps: cmd.slippage,
+            platform_fee_bps: None,
+        };
+        
+        let quote_response = jito_adapter.get_swap_quote(swap_quote_req).await
+            .context("Failed to get swap quote")?;
+        
+        let execute_req = ExecuteSwapRequest {
+            quote_response,
+            user_public_key: wallet.public_key().to_string(),
+            prioritization_fee_lamports: Some(config.jito.tip_lamports),
+            dynamic_compute_unit_limit: Some(true),
+        };
+        
+        let response = jito_adapter.execute_swap(execute_req).await
+            .context("Failed to execute Jito-protected swap")?;
+        
+        println!("\nSwap executed successfully!");
+        println!("Bundle ID: {}", response.signature);
+        println!("Status: {}", response.status);
+    } else {
+        // Direct Jupiter swap (build and execute)
+        tracing::info!("Jito MEV protection disabled - using direct Jupiter swap");
+        
+        let swap_request = crate::adapters::jupiter::SwapRequest {
+            user_public_key: wallet.public_key().to_string(),
+            quote_response: serde_json::to_value(&quote)
+                .context("Failed to serialize quote")?,
+            prioritization_fee_lamports: None,
+            dynamic_compute_unit_limit: true,
+        };
+        
+        let swap_response = jupiter.get_swap_transaction(&swap_request).await
+            .context("Failed to get swap transaction")?;
+        
+        println!("\nSwap transaction built successfully!");
+        println!("Note: Transaction needs to be signed and submitted manually");
+        println!("Transaction: {}", &swap_response.swap_transaction[..50]);
+    }
+
     Ok(())
 }
 

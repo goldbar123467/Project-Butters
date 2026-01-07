@@ -105,3 +105,12 @@ discord_webhook_url = ""
 telegram_enabled = false
 telegram_bot_token = ""
 telegram_chat_id = ""
+
+[jito]
+# Enable Jito bundles for MEV protection
+enabled = true
+# Block engine region: "ny", "amsterdam", "frankfurt", "tokyo"
+region = "ny"
+# Tip amount in lamports (10000 = 0.00001 SOL)
+tip_lamports = 10000
+# api_token = "optional-token"
