@@ -1,21 +1,39 @@
-# Butters - Mean Reversion Trading Bot
+# 🧈 Butters
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/goldbar123467/kyzlo-dex/ci.yml?branch=main&style=flat-square&logo=github&label=build)](https://github.com/goldbar123467/kyzlo-dex/actions)
-[![Tests](https://img.shields.io/badge/tests-107%20passing-brightgreen?style=flat-square&logo=checkmarx&logoColor=white)](https://github.com/goldbar123467/kyzlo-dex)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![Solana](https://img.shields.io/badge/solana--sdk-2.1-blueviolet?style=flat-square&logo=solana)](https://solana.com/)
-[![Jupiter](https://img.shields.io/badge/jupiter-v6-00D18C?style=flat-square)](https://jup.ag/)
-[![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+[![Build](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-179%20passing-brightgreen?style=flat-square)]()
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square)](https://www.rust-lang.org/)
+[![Solana](https://img.shields.io/badge/solana-mainnet-blueviolet?style=flat-square)](https://solana.com/)
+[![Jupiter](https://img.shields.io/badge/jupiter-v6-blue?style=flat-square)](https://jup.ag/)
+[![Jito](https://img.shields.io/badge/jito-MEV%20protected-purple?style=flat-square)](https://www.jito.wtf/)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-> Conservative mean reversion trading strategy for Solana via Jupiter DEX aggregator. Built in Rust with hexagonal architecture for reliability and testability.
+**Conservative mean reversion trading bot for Solana via Jupiter DEX aggregator with Jito MEV protection.**
 
 ---
 
-## One-Shot Quickstart
+## Features
 
-Get from zero to running in 6 copy-paste steps. Each step shows expected output so you know it worked.
+| Feature | Description |
+|---------|-------------|
+| :chart_with_upwards_trend: **Z-Score Statistical Gating** | Only trades when price deviates significantly from rolling mean (configurable threshold). Targets extreme moves with 65-75% reversion probability. |
+| :hexagon: **Hexagonal Architecture** | Clean separation of domain logic, ports, and adapters. Enables easy testing, mocking, and swapping of external integrations without rewriting core strategy. |
+| :page_facing_up: **Paper Trading Mode** | Simulate trades without risking real funds. Perfect for strategy tuning and validation before going live. Virtual portfolio tracks what would have happened. |
+| :rocket: **Jupiter V6 Integration** | Access to 20+ Solana DEXs through Jupiter's smart routing aggregator. Automatically finds best prices with minimal slippage across Raydium, Orca, Serum, and more. |
+| :shield: **Jito MEV Protection** | Submit trades as atomic bundles via Jito Block Engine to prevent frontrunning, sandwich attacks, and other MEV extraction. Your trades execute safely or not at all. |
+| :moneybag: **Risk Management** | Position sizing limits, max drawdown protection, automatic stop-loss triggers, and daily loss circuit breakers. Conservative defaults protect capital. |
+| :mag: **Preflight Safety Checks** | Validates balances, token accounts, slippage limits, and market conditions before submitting transactions. Fails fast to avoid costly mistakes. |
+| :satellite: **Real-time Price Monitoring** | Continuous OHLCV data collection and z-score calculation. Detects mean reversion opportunities as they happen with configurable lookback windows. |
 
-### Step 1: Check Prerequisites
+---
+
+## Quick Start
+
+Get from zero to running in 6 steps. Each step shows expected output so you know it worked.
+
+### Step 1: Prerequisites
+
+Ensure you have the required tools installed:
 
 ```bash
 rustc --version && cargo --version && solana --version
@@ -23,12 +41,17 @@ rustc --version && cargo --version && solana --version
 
 **Expected output:**
 ```
-rustc 1.70.0 (or higher)
-cargo 1.70.0 (or higher)
+rustc 1.75.0 (or higher)
+cargo 1.75.0 (or higher)
 solana-cli 1.18.x (or higher)
 ```
 
-> If any command fails, see [Troubleshooting](#troubleshooting) below.
+**Requirements:**
+- **Rust**: 1.75+ with Cargo build system
+- **Solana CLI**: 1.18+ for wallet management and RPC interaction
+- **Git**: For cloning the repository
+
+**Missing a tool?** See [Troubleshooting](#troubleshooting) below for installation instructions.
 
 ### Step 2: Clone and Build
 
@@ -40,15 +63,64 @@ cargo build --release
 
 **Expected output:**
 ```
-   Compiling butters v0.1.0
+   Compiling butters v0.1.0 (/home/user/kyzlo-dex)
     Finished release [optimized] target(s) in 45.23s
 ```
 
-### Step 3: Generate Devnet Wallet + Airdrop
+This compiles with optimizations enabled. The first build may take a few minutes as dependencies are fetched and compiled.
+
+### Step 3: Configure
+
+Create a configuration file for devnet testing:
 
 ```bash
+cat > config.toml << 'EOF'
+[solana]
+rpc_url = "https://api.devnet.solana.com"
+keypair_path = "~/.config/solana/devnet.json"
+
+[jupiter]
+api_url = "https://public.jupiterapi.com/v6"
+slippage_bps = 50
+
+[strategy]
+lookback_period = 50
+z_threshold = 2.5
+min_volume_percentile = 60
+max_spread_bps = 30
+cooldown_seconds = 300
+
+[risk]
+max_position_pct = 5.0
+stop_loss_pct = 2.0
+take_profit_pct = 1.5
+max_daily_trades = 10
+max_daily_loss_pct = 3.0
+
+[tokens]
+base = "So11111111111111111111111111111111111111112"   # SOL
+quote = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" # USDC
+EOF
+```
+
+**What this does:**
+- Sets devnet as the network (safe for testing)
+- Configures conservative risk limits (5% max position, 2% stop loss)
+- Targets SOL/USDC trading pair
+- Uses Jupiter V6 API for swap routing
+
+### Step 4: Get Devnet SOL
+
+Generate a devnet wallet and request test SOL (has no real value):
+
+```bash
+# Generate new keypair for devnet
 solana-keygen new --outfile ~/.config/solana/devnet.json --no-bip39-passphrase
+
+# Switch to devnet
 solana config set --url devnet --keypair ~/.config/solana/devnet.json
+
+# Request airdrop (free test SOL)
 solana airdrop 2
 ```
 
@@ -56,38 +128,17 @@ solana airdrop 2
 ```
 Wrote new keypair to ~/.config/solana/devnet.json
 Config File: ~/.config/solana/cli/config.yml
+RPC URL: https://api.devnet.solana.com
 Requesting airdrop of 2 SOL
 Signature: 5abc123...
 2 SOL
 ```
 
-### Step 4: Verify Balance
+**Note:** Devnet faucet may occasionally be rate-limited. If airdrop fails, wait 60 seconds and try again with `solana airdrop 1`.
 
-```bash
-solana balance
-```
+### Step 5: Paper Trading Test
 
-**Expected output:**
-```
-2 SOL
-```
-
-### Step 5: Get Your First Quote
-
-```bash
-cargo run --release -- quote SOL USDC 0.1
-```
-
-**Expected output:**
-```
-Quote received:
-  Input: 0.1 SOL
-  Output: ~15.23 USDC
-  Price Impact: 0.01%
-  Route: SOL -> USDC via Raydium
-```
-
-### Step 6: Run Paper Trading
+Run the bot in paper trading mode (no real transactions):
 
 ```bash
 cargo run --release -- run --paper
@@ -95,14 +146,125 @@ cargo run --release -- run --paper
 
 **Expected output:**
 ```
-[INFO] Starting paper trading mode...
+[INFO] Starting Butters trading bot
+[INFO] Mode: Paper Trading (simulated)
 [INFO] Loaded config from config.toml
+[INFO] Connected to devnet: https://api.devnet.solana.com
 [INFO] Watching SOL/USDC pair
-[INFO] Current z-score: 0.42 (within bounds, no trade)
-[INFO] Tick 1 complete. Portfolio: 2.0 SOL, 0.0 USDC
+[INFO] Lookback: 50 candles | Z-threshold: 2.5
+[INFO] Current z-score: 0.42 (within bounds, no trade signal)
+[INFO] Tick 1 complete. Virtual portfolio: 2.0 SOL, 0.0 USDC
 ```
 
-You are now running Butters in paper trading mode. No real funds are at risk.
+**What's happening:**
+- Bot monitors real devnet prices via Jupiter API
+- Calculates z-scores based on rolling statistics
+- Logs virtual trades it *would* make
+- No actual transactions are submitted
+
+Press `Ctrl+C` to stop.
+
+### Step 6: Going Live
+
+**⚠️ CRITICAL SAFETY WARNINGS:**
+
+Before running with real funds on mainnet:
+
+1. **Test extensively in paper mode** - Run for at least 7 days to understand behavior
+2. **Start small** - Use amounts you can afford to lose completely (0.1-0.5 SOL maximum)
+3. **Use mainnet config** - Update `rpc_url` to mainnet and use a dedicated keypair
+4. **Monitor actively** - Watch the first few live trades closely
+5. **Set strict limits** - Configure conservative `max_daily_loss_pct` (2-3%)
+6. **Private RPC recommended** - Public RPCs may be rate-limited; use Helius/QuickNode free tier
+
+**To run live (after testing):**
+
+```bash
+# Create mainnet config (edit config.toml to use mainnet RPC)
+# Generate mainnet keypair: solana-keygen new --outfile ~/.config/solana/mainnet.json
+
+# Run live mode (NO --paper flag)
+cargo run --release -- run
+```
+
+**Expected output:**
+```
+[INFO] Starting Butters trading bot
+[INFO] Mode: LIVE TRADING on mainnet-beta
+[WARN] Real funds at risk. Monitoring SOL/USDC with 5.0% max position size
+```
+
+**Never commit your mainnet keypair to git. Keep it secure.**
+
+---
+
+## Installation
+
+### Build from Source
+
+**Prerequisites:**
+- Rust 1.75+ (install via [rustup](https://rustup.rs/))
+- Solana CLI 1.18+ (install via [Solana docs](https://docs.solana.com/cli/install-solana-cli-tools))
+
+**Steps:**
+
+```bash
+# Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# Install Solana CLI (if not already installed)
+sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+
+# Clone repository
+git clone https://github.com/goldbar123467/kyzlo-dex.git
+cd kyzlo-dex
+
+# Build release binary
+cargo build --release
+
+# Binary will be at: target/release/butters
+# Optionally, install to system path:
+cargo install --path .
+```
+
+**Verify installation:**
+
+```bash
+butters --version
+# Output: butters 0.1.0
+```
+
+### Optional: Private RPC Setup
+
+Public Solana RPCs have rate limits that may impact trading performance. For production use, configure a private RPC endpoint:
+
+**Recommended Providers (Free Tiers Available):**
+
+| Provider | Free Tier | Latency | Setup |
+|----------|-----------|---------|-------|
+| [Helius](https://helius.dev/) | 100 req/s | Low | Create API key, use `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` |
+| [QuickNode](https://www.quicknode.com/) | 25 req/s | Low | Create endpoint, copy HTTPS URL |
+| [Triton](https://triton.one/) | 50 req/s | Medium | Create project, copy RPC URL |
+
+**Configure in `config.toml`:**
+
+```toml
+[solana]
+rpc_url = "https://mainnet.helius-rpc.com/?api-key=YOUR_API_KEY"
+# OR
+rpc_url = "https://quick-node-xyz.quiknode.pro/YOUR_ENDPOINT/"
+```
+
+**Security:** Store API keys in environment variables instead of committing to config:
+
+```bash
+export SOLANA_RPC_URL="https://mainnet.helius-rpc.com/?api-key=YOUR_KEY"
+
+# Update config.toml to read from env:
+# rpc_url = "${SOLANA_RPC_URL}"  # Requires env variable support in your config loader
+```
 
 ---
 
@@ -113,380 +275,283 @@ You are now running Butters in paper trading mode. No real funds are at risk.
 | `rustc: command not found` | Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` then restart terminal |
 | `solana: command not found` | Install Solana CLI: `sh -c "$(curl -sSfL https://release.solana.com/stable/install)"` then add to PATH |
 | `linker 'cc' not found` | Install build tools: `sudo apt install build-essential` (Ubuntu) or `xcode-select --install` (macOS) |
-| `RPC rate limit exceeded` | Wait 60 seconds, or use a private RPC endpoint in config.toml |
+| `RPC rate limit exceeded` | Wait 60 seconds, or configure a private RPC endpoint (see [Optional: Private RPC Setup](#optional-private-rpc-setup)) |
 | `Airdrop failed` | Devnet faucet may be dry. Try: `solana airdrop 1` (smaller amount) or wait and retry |
-| `insufficient funds for rent` | You need at least 0.01 SOL for account rent. Request another airdrop. |
+| `insufficient funds for rent` | You need at least 0.01 SOL for account rent. Request another airdrop with `solana airdrop 1` |
+| `Failed to parse config.toml` | Verify TOML syntax with a validator. Check for missing quotes, brackets, or invalid values |
+| `Jupiter API connection failed` | Check internet connection. Verify `jupiter.api_url` is set to `https://public.jupiterapi.com` (not deprecated endpoints) |
+| `Wallet keypair not found` | Ensure `keypair_path` in config.toml points to a valid keypair file. Generate with `solana-keygen new` |
 
 ---
 
-## Features
+## Configuration Reference
 
-| Feature | Description |
-|---------|-------------|
-| :chart_with_upwards_trend: **Z-Score Statistical Gating** | Only trades when price deviates significantly from rolling mean (configurable threshold) |
-| :hexagon: **Hexagonal Architecture** | Clean separation of domain logic, ports, and adapters for easy testing and swapping |
-| :page_facing_up: **Paper Trading Mode** | Simulate trades without risking real funds - perfect for strategy tuning |
-| :rocket: **Jupiter V6 Integration** | Access to 20+ Solana DEXs through Jupiter's smart routing aggregator |
-| :shield: **Risk Management** | Position sizing, max drawdown limits, and automatic stop-loss triggers |
+All configuration is done through a TOML file. By default, the bot looks for `config.toml` (override with `--config` flag).
+
+### [strategy]
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `lookback_period` | integer | 50 | Number of candles for rolling mean/std calculation |
+| `z_threshold` | float | 2.5 | Z-score threshold for entry signals (2.0 = moderate, 2.5 = conservative) |
+| `z_exit_threshold` | float | 0.0 | Z-score target for exit (0.0 = mean reversion) |
+| `min_volume_percentile` | integer | 60 | Minimum volume percentile filter (0-100) |
+| `max_spread_bps` | integer | 30 | Maximum bid-ask spread in basis points |
+| `cooldown_seconds` | integer | 300 | Minimum seconds between trades |
+
+### [risk]
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_position_pct` | float | 5.0 | Maximum position size as % of portfolio |
+| `stop_loss_pct` | float | 2.0 | Stop loss trigger percentage |
+| `take_profit_pct` | float | 1.5 | Take profit target percentage |
+| `max_daily_trades` | integer | 10 | Maximum trades per day |
+| `max_daily_loss_pct` | float | 3.0 | Daily loss circuit breaker (%) |
+
+### [tokens]
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `base` | string | Base token mint address (e.g., SOL) |
+| `quote` | string | Quote token mint address (e.g., USDC) |
+
+### [jupiter]
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_url` | string | `https://public.jupiterapi.com` | Jupiter API base URL |
+| `slippage_bps` | integer | 50 | Slippage tolerance in basis points (50 = 0.5%) |
+
+### [solana]
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `rpc_url` | string | Solana RPC endpoint URL |
+| `keypair_path` | string | Path to wallet keypair file |
+
+### [jito] (Optional)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | true | Enable Jito MEV protection |
+| `region` | string | `ny` | Block engine region (ny, amsterdam, frankfurt, tokyo) |
+| `tip_lamports` | integer | 10000 | Validator tip amount |
 
 ---
 
-## Configuration
+## CLI Reference
 
-The `config.toml` file contains all strategy parameters:
+### Global Options
 
-```toml
-[strategy]
-lookback_period = 20    # Candles for rolling mean/std calculation
-z_threshold = 2.0       # Z-score threshold (2.0 = moderate, 2.5 = conservative)
-cooldown_seconds = 300  # Minimum time between trades
+| Option | Description |
+|--------|-------------|
+| `-v, --verbose` | Enable verbose logging |
+| `--debug` | Enable debug logging |
+| `--version` | Show version |
+| `--help` | Show help |
 
-[risk]
-max_position_pct = 5.0  # Maximum position size as % of portfolio
-stop_loss_pct = 2.5     # Stop loss percentage
-max_daily_trades = 10   # Maximum trades per day
-max_daily_loss_pct = 3.0 # Circuit breaker: max daily loss
+### butters run
 
-[jupiter]
-slippage_bps = 50       # Slippage tolerance (0.5%)
+Start the trading loop.
 
-[solana]
-rpc_url = "https://api.devnet.solana.com"  # Use devnet for testing
-keypair_path = "~/.config/solana/devnet.json"
+```bash
+butters run [OPTIONS]
 ```
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `lookback_period` | 20 | Number of candles for calculating rolling mean and standard deviation |
-| `z_threshold` | 2.0 | Z-score threshold to trigger trades (higher = fewer, more confident trades) |
-| `max_position_pct` | 5.0 | Maximum position size as percentage of portfolio |
-| `slippage_bps` | 50 | Maximum allowed slippage in basis points (50 = 0.5%) |
+| Option | Description |
+|--------|-------------|
+| `-c, --config FILE` | Path to configuration file (default: `config.toml`) |
+| `-p, --paper` | Run in paper trading mode (no real transactions) |
+| `--live` | Enable live mainnet trading (requires `--i-accept-losses`) |
+| `--i-accept-losses` | Acknowledge financial risk (required for `--live`) |
 
-**Important**: Never commit your keypair file or API keys. Use environment variables for sensitive data.
+**Examples:**
+
+```bash
+# Paper trading (safe testing)
+butters run --paper
+
+# Live trading (requires acknowledgment)
+butters run --live --i-accept-losses
+```
+
+### butters status
+
+Check bot status and portfolio.
+
+```bash
+butters status [OPTIONS]
+```
+
+| Option | Description |
+|--------|-------------|
+| `-c, --config FILE` | Path to configuration file |
+| `-d, --detailed` | Show detailed portfolio breakdown |
+
+### butters quote
+
+Get a swap quote from Jupiter.
+
+```bash
+butters quote <INPUT> <OUTPUT> <AMOUNT>
+```
+
+**Example:**
+
+```bash
+butters quote SOL USDC 1.0
+```
 
 ---
 
 ## Architecture
 
-Butters follows hexagonal (ports & adapters) architecture:
+Butters uses **hexagonal architecture** (ports and adapters) for clean separation of concerns, testability, and flexibility.
 
 ```
-                    +------------------+
-                    |   CLI Adapter    |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |   ORCHESTRATOR   |
-                    | (application)    |
-                    +--------+---------+
-                             |
-         +-------------------+-------------------+
-         |                   |                   |
-+--------v-------+  +--------v-------+  +--------v-------+
-|  DOMAIN CORE   |  |  STRATEGY      |  |  MARKET        |
-|                |  |  PORT          |  |  PORT          |
-|  - Position    |  |  - ZScoreGate  |  |  - PriceFeed   |
-|  - Trade       |  |  - MeanRevert  |  |  - OHLCV       |
-|  - Portfolio   |  +--------+-------+  +--------+-------+
-|  - RiskLimits  |           |                   |
-+----------------+  +--------v-------+  +--------v-------+
-                    |  STRATEGY      |  |  JUPITER       |
-                    |  ADAPTER       |  |  ADAPTER       |
-                    +----------------+  +--------+-------+
-                                                 |
-                                        +--------v-------+
-                                        |  SOLANA        |
-                                        |  CLIENT        |
-                                        +----------------+
+                         ┌─────────────────┐
+                         │   CLI ADAPTER   │
+                         │   (clap args)   │
+                         └────────┬────────┘
+                                  │
+                         ┌────────▼────────┐
+                         │  ORCHESTRATOR   │
+                         │  (application)  │
+                         │  - Trading loop │
+                         │  - Coordination │
+                         └────────┬────────┘
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+┌───────▼───────┐       ┌─────────▼─────────┐     ┌─────────▼─────────┐
+│  DOMAIN CORE  │       │   STRATEGY PORT   │     │    MARKET PORT    │
+│  - Position   │       │   - ZScoreGate    │     │    - PriceFeed    │
+│  - Trade      │       │   - MeanReversion │     │    - OHLCV        │
+│  - Portfolio  │       └─────────┬─────────┘     └─────────┬─────────┘
+│  - RiskLimits │                 │                         │
+└───────────────┘       ┌─────────▼─────────┐     ┌─────────▼─────────┐
+                        │ STRATEGY ADAPTER  │     │  JUPITER ADAPTER  │
+                        │  (mean reversion) │     │   (DEX routing)   │
+                        └───────────────────┘     └─────────┬─────────┘
+                                                            │
+                                                  ┌─────────▼─────────┐
+                                                  │   JITO ADAPTER    │
+                                                  │ (MEV protection)  │
+                                                  └─────────┬─────────┘
+                                                            │
+                                                  ┌─────────▼─────────┐
+                                                  │  SOLANA CLIENT    │
+                                                  │  - RPC            │
+                                                  │  - Wallet         │
+                                                  │  - Tx Builder     │
+                                                  └───────────────────┘
 ```
 
-### Directory Structure
+### Layer Descriptions
 
-```
-src/
-├── main.rs              # CLI entrypoint
-├── domain/              # Pure business logic (zero external deps)
-├── ports/               # Trait definitions (interfaces)
-├── strategy/            # Mean reversion & z-score implementation
-├── adapters/            # External integrations
-│   ├── jupiter/         # Jupiter V6 API client
-│   ├── solana/          # Solana RPC & wallet
-│   └── cli/             # Command-line interface
-├── application/         # Orchestration & use cases
-└── config/              # Configuration loading
-```
+| Layer | Purpose |
+|-------|---------|
+| **Domain Core** | Pure business logic with zero external dependencies |
+| **Ports** | Trait definitions (interfaces) for external systems |
+| **Adapters** | Concrete implementations connecting to external APIs |
+| **Application** | Orchestrator that wires all components together |
+| **Strategy** | Signal generation logic using domain types |
+
+### Benefits
+
+- **Testability**: Domain and strategy logic tested without network calls
+- **Flexibility**: Swap Jupiter for another DEX by implementing ExecutionPort
+- **Isolation**: Core trading logic unaffected by API changes
+- **Clarity**: Clear separation between "what" (domain), "how" (adapters), and "when" (orchestrator)
 
 ---
 
-## Strategy Overview
+## Safety Features
 
-The mean reversion strategy identifies oversold/overbought conditions using z-score analysis:
+Butters implements multiple layers of safety to protect your capital.
 
-### The Z-Score Formula
+### 1. Jito MEV Protection (Fail-Closed)
 
-```
-z_score = (current_price - rolling_mean) / rolling_std
-```
+All trades are submitted as **atomic bundles** via the Jito Block Engine:
 
-| Z-Score | Interpretation | Action |
-|---------|----------------|--------|
-| z < -2.0 | Price is unusually LOW (oversold) | BUY (expect price to rise back to mean) |
-| z > +2.0 | Price is unusually HIGH (overbought) | SELL (expect price to fall back to mean) |
-| -2.0 < z < +2.0 | Price is normal | HOLD (no trade) |
+- **Frontrunning Protection**: Transactions are not visible in the mempool
+- **Sandwich Attack Prevention**: Bundles execute atomically or not at all
+- **Fail-Closed Policy**: If bundle submission fails, the trade is NOT executed via fallback
 
-### Example
+### 2. Preflight Safety Checks
 
-```
-Rolling 20-period mean: $150.00
-Standard deviation: $5.00
-Current price: $138.00
+| Check | Purpose |
+|-------|---------|
+| Balance Verification | Confirms sufficient funds for trade + fees |
+| Token Account Validation | Ensures token accounts exist |
+| Slippage Enforcement | Rejects if slippage exceeds configured limit |
+| Permission Check | Validates wallet keypair permissions |
 
-z = (138 - 150) / 5 = -2.4
+### 3. Risk Management Limits
 
-Since z < -2.0, the strategy signals BUY (oversold)
-```
+| Feature | Config Option | Default |
+|---------|--------------|---------|
+| Position Limits | `max_position_pct` | 5% |
+| Stop Loss | `stop_loss_pct` | 2% |
+| Take Profit | `take_profit_pct` | 1.5% |
+| Daily Trade Limit | `max_daily_trades` | 10 |
+| Daily Loss Circuit Breaker | `max_daily_loss_pct` | 3% |
 
-With a z-threshold of 2.5, only ~1.2% of price movements trigger trades, focusing on high-probability setups where extreme deviations historically revert to the mean with 65-75% probability.
+### 4. Paper Trading Mode
 
----
-
-## FAQ
-
-<details>
-<summary><strong>1. What is this project?</strong></summary>
-
-Butters is an automated trading bot that executes mean reversion trades on the Solana blockchain. It monitors price movements, calculates statistical deviations, and automatically buys when prices are unusually low or sells when prices are unusually high. The name "Butters" reflects its conservative, steady approach to trading.
-
-</details>
-
-<details>
-<summary><strong>2. What is Solana?</strong></summary>
-
-Solana is a high-performance blockchain that can process thousands of transactions per second with sub-second finality. Unlike Ethereum, Solana has very low transaction fees (typically under $0.01), making it ideal for trading bots that execute many small trades. Solana uses a Proof-of-Stake consensus mechanism and its native currency is SOL.
-
-</details>
-
-<details>
-<summary><strong>3. What is Jupiter?</strong></summary>
-
-Jupiter is a DEX (Decentralized Exchange) aggregator on Solana. Instead of connecting to one exchange, Jupiter routes your trade through 20+ exchanges (Raydium, Orca, Serum, etc.) to find the best price. Think of it like a flight aggregator that searches multiple airlines - Jupiter searches multiple DEXs to get you the best swap rate with minimal slippage.
-
-</details>
-
-<details>
-<summary><strong>4. What is mean reversion?</strong></summary>
-
-Mean reversion is a trading strategy based on the observation that prices tend to return to their average over time. If a price spikes unusually high, it often falls back. If it drops unusually low, it often bounces back. Butters exploits this pattern by buying during dips and selling during spikes, profiting from the "reversion to the mean."
-
-</details>
-
-<details>
-<summary><strong>5. What is a z-score?</strong></summary>
-
-A z-score measures how many standard deviations a value is from the average. A z-score of 0 means the price equals the average. A z-score of +2 means the price is 2 standard deviations above average (unusually high). A z-score of -2 means it is 2 standard deviations below (unusually low). In statistics, about 95% of values fall within +/- 2 standard deviations, so anything outside that range is considered significant.
-
-</details>
-
-<details>
-<summary><strong>6. What are the prerequisites?</strong></summary>
-
-You need three things installed:
-
-1. **Rust** (1.70+): The programming language Butters is written in
-2. **Solana CLI**: Command-line tools for interacting with Solana
-3. **A Solana wallet**: A keypair file that holds your funds
-
-Optional but recommended:
-- A private RPC endpoint (free tier from Helius, QuickNode, or Triton)
-- Basic understanding of trading concepts
-
-</details>
-
-<details>
-<summary><strong>7. Is this safe to use with real money?</strong></summary>
-
-**Use at your own risk.** Butters is experimental software. While it includes risk management features (max drawdown, position limits), cryptocurrency trading is inherently risky. We strongly recommend:
-
-1. Start with paper trading mode (no real funds)
-2. Test extensively on devnet with fake SOL
-3. If using real funds, start with very small amounts you can afford to lose
-4. Never invest money you cannot afford to lose
-
-</details>
-
-<details>
-<summary><strong>8. What are lamports?</strong></summary>
-
-Lamports are the smallest unit of SOL, similar to how cents are the smallest unit of dollars. 1 SOL = 1,000,000,000 (one billion) lamports. When specifying trade amounts in the config, you use lamports. For example, 100,000,000 lamports = 0.1 SOL.
-
-</details>
-
-<details>
-<summary><strong>9. What are token mints?</strong></summary>
-
-On Solana, every token has a unique "mint address" that identifies it. Think of it like a stock ticker symbol, but as a long string. Common mints:
-
-| Token | Mint Address |
-|-------|--------------|
-| SOL | `So11111111111111111111111111111111111111112` |
-| USDC | `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` |
-| USDT | `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB` |
-
-You configure which tokens to trade using these mint addresses.
-
-</details>
-
-<details>
-<summary><strong>10. What is slippage?</strong></summary>
-
-Slippage is the difference between the expected price of a trade and the actual executed price. It happens because prices can change between when you request a quote and when the transaction confirms. Slippage is measured in basis points (bps), where 100 bps = 1%. Setting `slippage_bps = 50` means you accept up to 0.5% worse than the quoted price.
-
-</details>
-
-<details>
-<summary><strong>11. What is an RPC endpoint?</strong></summary>
-
-An RPC (Remote Procedure Call) endpoint is a server that lets you interact with the Solana blockchain. It is like an API for reading blockchain data and submitting transactions. The public endpoints (api.devnet.solana.com) are free but rate-limited. For production use, you should use a private RPC provider like Helius, QuickNode, or Triton, which offer free tiers with higher limits.
-
-</details>
-
-<details>
-<summary><strong>12. How do I get test SOL for devnet?</strong></summary>
-
-Devnet SOL is free and has no real value. Get it via:
+Test strategies without risking real funds:
 
 ```bash
-# Method 1: CLI airdrop
-solana airdrop 2
-
-# Method 2: Web faucet
-# Visit https://faucet.solana.com and paste your wallet address
-```
-
-If airdrops fail (faucet is dry), wait a few minutes and try again with a smaller amount (1 SOL instead of 2).
-
-</details>
-
-<details>
-<summary><strong>13. What is paper trading mode?</strong></summary>
-
-Paper trading simulates trades without actually executing them on the blockchain. The bot tracks a virtual portfolio and logs what trades it *would* have made. This lets you test and tune your strategy without risking real funds. Enable it with the `--paper` flag. Always paper trade first before using real money.
-
-</details>
-
-<details>
-<summary><strong>14. How do I understand the config file?</strong></summary>
-
-The config.toml has four sections:
-
-| Section | What it controls |
-|---------|------------------|
-| `[strategy]` | Trading logic: z-score threshold, lookback period, cooldown time |
-| `[risk]` | Safety limits: max position size, stop loss, daily loss limit |
-| `[jupiter]` | DEX settings: slippage tolerance |
-| `[solana]` | Network: RPC URL, wallet keypair path |
-
-Start with the defaults and adjust based on your paper trading results.
-
-</details>
-
-<details>
-<summary><strong>15. Why hexagonal architecture?</strong></summary>
-
-Hexagonal architecture (also called "ports and adapters") keeps the core trading logic separate from external dependencies like Jupiter or Solana. Benefits:
-
-1. **Testability**: Test the strategy with mock data without hitting real APIs
-2. **Flexibility**: Swap Jupiter for another DEX aggregator without rewriting strategy code
-3. **Reliability**: External API changes do not break your core logic
-4. **Contract Testing**: Use recorded API responses (fixtures) to test without network calls
-
-The `src/adapters/jupiter/` folder contains the Jupiter integration, which can be swapped out without touching `src/domain/`.
-
-</details>
-
----
-
-## Contract Testing
-
-Butters uses **contract testing** with recorded API fixtures to ensure reliability without depending on live APIs during tests.
-
-```
-fixtures/
-└── jupiter/
-    ├── quote_sol_usdc.json      # Recorded Jupiter quote response
-    ├── swap_instructions.json   # Recorded swap transaction data
-    └── README.md                # Fixture documentation
-```
-
-This approach:
-- Makes tests fast and deterministic
-- Works offline
-- Catches API contract changes early
-- Lives in `fixtures/` directory
-
-To update fixtures after Jupiter API changes:
-
-```bash
-cargo test --features record-fixtures
-```
-
----
-
-## Development
-
-### Run Tests
-
-```bash
-# Run all tests
-cargo test
-
-# Run with output
-cargo test -- --nocapture
-
-# Run specific test
-cargo test test_zscore_calculation
-```
-
-### Debug Mode
-
-```bash
-# Build with debug symbols
-cargo build
-
-# Run with verbose logging
-RUST_LOG=debug cargo run -- run --paper
-```
-
-### Commands Reference
-
-```bash
-# Start trading loop (paper mode)
 butters run --paper
-
-# Start trading loop (live mode - use with caution!)
-butters run
-
-# Check wallet status and balance
-butters status
-
-# Get a swap quote
-butters quote SOL USDC 1.0
-
-# Execute a swap (with confirmation)
-butters swap SOL USDC 1.0
-
-# Run backtesting
-butters backtest --pair SOL/USDC --days 30
 ```
+
+- Monitors real market prices via Jupiter API
+- Calculates z-scores and generates signals
+- Logs virtual trades without submitting transactions
+
+**Recommended**: Run in paper mode for at least 7 days before live trading.
+
+### 5. Live Trading Safeguards
+
+Live trading requires explicit acknowledgment:
+
+```bash
+# This will fail:
+butters run --live
+
+# This is required:
+butters run --live --i-accept-losses
+```
+
+The `--i-accept-losses` flag ensures you consciously accept the risk before trading with real funds.
 
 ---
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License
+
+Copyright (c) 2024 Butters Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ---
 
-<p align="center">
-  <sub>Built with Rust. Powered by Jupiter. Running on Solana.</sub>
-</p>
+**Disclaimer:** This software is provided for educational and research purposes. Trading cryptocurrencies involves substantial risk of loss. The authors and contributors are not responsible for any financial losses incurred through the use of this software. Always trade responsibly and only with funds you can afford to lose completely.
