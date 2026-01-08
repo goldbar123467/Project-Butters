@@ -6,9 +6,10 @@
 # 45 candles = ~2.25 hours on 3m timeframe - balanced responsiveness
 lookback_period = 45
 
-# Z-score threshold for entry (2.0 = moderate, 2.5 = conservative)
-# 2.0 = ~2.3% of data points trigger signals - targets 1-2 trades/hour
-z_threshold = 2.0
+# Z-score threshold for entry (1.8 = aggressive, 2.0 = moderate, 2.5 = conservative)
+# 1.8 = ~7.2% tail probability = 2-3 trades/hour with filters
+# Expected win rate 60-65% vs 53.3% break-even = profitable
+z_threshold = 1.8
 
 # Exit at deadband near mean (0.2) for better fill rates
 # Lower than entry threshold to capture mean reversion profits
@@ -34,8 +35,10 @@ max_position_pct = 5.0
 # Stop loss percentage (0.5% = tight for mean reversion)
 stop_loss_pct = 0.5
 
-# Take profit percentage (0.6% = exits before full reversion)
-take_profit_pct = 0.6
+# Take profit percentage (1.0% = better R:R ratio)
+# With 0.3% fees: net win +0.7%, net loss -0.8%
+# Break-even win rate: 53.3% (achievable at z=1.8)
+take_profit_pct = 1.0
 
 # Maximum trades per day
 max_daily_trades = 20
