@@ -427,7 +427,7 @@ mod tests {
     fn test_multiple_valid_transfers_pass() {
         let (validator, user) = create_test_validator();
         let jito_tip1: Pubkey = "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5".parse().unwrap();
-        let jito_tip2: Pubkey = "HFqU5x63VTqvQss8hp11i4bVmkdzGZBJLYQ6QwBvp8dx".parse().unwrap();
+        let jito_tip2: Pubkey = "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe".parse().unwrap();
 
         let ix1 = system_instruction::transfer(&user.pubkey(), &jito_tip1, 10_000);
         let ix2 = system_instruction::transfer(&user.pubkey(), &jito_tip2, 10_000);
