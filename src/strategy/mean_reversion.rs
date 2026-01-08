@@ -73,29 +73,32 @@ impl MeanReversionStrategy {
     }
 
     /// Update strategy with new price and get trade action
+    /// NOTE: This only signals the action - call confirm_trade() after successful execution
     pub fn update(&mut self, price: f64) -> Option<TradeAction> {
         // Update z-score gate
         let zscore_result = self.zscore_gate.update(price)?;
 
-        // Check if we're in cooldown
-        if self.is_in_cooldown() {
+        // Check if we're in cooldown (but NOT for Exit - always allow exit attempts)
+        if self.is_in_cooldown() && !matches!(self.position, PositionState::Long { .. } | PositionState::Short { .. }) {
             return Some(TradeAction::Hold);
         }
 
-        // Check risk limits
-        if !self.check_risk_limits() {
+        // Check risk limits (but NOT for Exit - always allow exit attempts)
+        if !self.check_risk_limits() && matches!(self.position, PositionState::Flat) {
             return Some(TradeAction::Hold);
         }
 
         // Generate action based on current position and z-score
         let action = self.evaluate_action(&zscore_result, price);
 
-        // Update state if action taken
-        if action != TradeAction::Hold {
-            self.on_trade_executed(action, price);
-        }
-
+        // NOTE: State is NOT updated here - orchestrator must call confirm_trade() after success
         Some(action)
+    }
+
+    /// Confirm a trade was successfully executed - updates internal state
+    /// Call this ONLY after the on-chain transaction confirms
+    pub fn confirm_trade(&mut self, action: TradeAction, price: f64) {
+        self.on_trade_executed(action, price);
     }
 
     /// Evaluate what action to take based on current state

@@ -55,6 +55,13 @@ pub struct RiskSection {
     pub max_daily_loss_pct: f64,
     /// Time-based stop (exit after N hours if no movement)
     pub time_stop_hours: u64,
+    /// Trade size in SOL per signal (e.g., 0.1 = trade 0.1 SOL)
+    #[serde(default = "default_trade_size_sol")]
+    pub trade_size_sol: f64,
+}
+
+fn default_trade_size_sol() -> f64 {
+    0.1 // Default to 0.1 SOL per trade
 }
 
 /// Tokens configuration section
@@ -343,6 +350,7 @@ take_profit_pct = 1.5
 max_daily_trades = 10
 max_daily_loss_pct = 3.0
 time_stop_hours = 24
+trade_size_sol = 0.1
 
 [tokens]
 base_mint = "So11111111111111111111111111111111111111112"
@@ -416,6 +424,7 @@ take_profit_pct = 1.5
 max_daily_trades = 10
 max_daily_loss_pct = 3.0
 time_stop_hours = 24
+trade_size_sol = 0.1
 
 [tokens]
 base_mint = "So11111111111111111111111111111111111111112"
@@ -471,6 +480,7 @@ take_profit_pct = 1.5
 max_daily_trades = 10
 max_daily_loss_pct = 3.0
 time_stop_hours = 24
+trade_size_sol = 0.1
 
 [tokens]
 base_mint = "So11111111111111111111111111111111111111112"
@@ -598,6 +608,7 @@ take_profit_pct = 1.5
 max_daily_trades = 10
 max_daily_loss_pct = 3.0
 time_stop_hours = 24
+trade_size_sol = 0.1
 
 [tokens]
 base_mint = "So11111111111111111111111111111111111111112"
@@ -650,6 +661,7 @@ take_profit_pct = 1.5
 max_daily_trades = 10
 max_daily_loss_pct = 3.0
 time_stop_hours = 24
+trade_size_sol = 0.1
 
 [tokens]
 base_mint = "So11111111111111111111111111111111111111112"
@@ -711,6 +723,7 @@ take_profit_pct = 1.5
 max_daily_trades = 10
 max_daily_loss_pct = 3.0
 time_stop_hours = 24
+trade_size_sol = 0.1
 
 [tokens]
 base_mint = "So11111111111111111111111111111111111111112"

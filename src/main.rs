@@ -221,6 +221,8 @@ async fn run_command(cmd: RunCmd) -> Result<()> {
         config.tokens.quote_mint.clone(),
         config.jupiter.slippage_bps,
         cmd.paper,
+        config.risk.trade_size_sol,
+        config.jupiter.max_priority_fee_lamports,
     ).context("Failed to create orchestrator")?;
 
     // Setup Ctrl+C handler

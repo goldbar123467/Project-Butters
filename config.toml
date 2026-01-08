@@ -42,6 +42,10 @@ max_daily_loss_pct = 3.0
 # Time-based stop (exit after N hours if no movement)
 time_stop_hours = 24
 
+# Trade size in SOL per signal
+# With ~0.7 SOL (~$100) + $87 USDC, using 0.1 SOL per trade (~$14/trade)
+trade_size_sol = 0.1
+
 [tokens]
 # SOL mint address
 base_mint = "So11111111111111111111111111111111111111112"

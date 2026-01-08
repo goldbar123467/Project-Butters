@@ -213,8 +213,9 @@ impl BalanceGuard {
             expected.sol_change, actual_delta, diff
         );
 
-        // Check if within threshold
-        if abs_diff > self.config.threshold_lamports {
+        // Only flag unexpected LOSSES (negative diff), not unexpected gains
+        // Positive diff = user gained more than expected = favorable outcome, not a security threat
+        if diff < 0 && abs_diff > self.config.threshold_lamports {
             let violation = BalanceViolation {
                 timestamp: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -234,8 +235,9 @@ impl BalanceGuard {
                 expected.sol_change, actual_delta, diff, expected.reason
             );
 
-            // Check cumulative threshold
-            if self.cumulative_unexplained.abs() > self.config.cumulative_threshold {
+            // Check cumulative threshold - only halt on cumulative LOSSES
+            if self.cumulative_unexplained < 0
+                && self.cumulative_unexplained.abs() > self.config.cumulative_threshold {
                 if self.config.halt_on_violation {
                     self.is_halted = true;
                     tracing::error!("TRADING HALTED: Cumulative unexplained loss {} exceeds threshold",
@@ -256,6 +258,12 @@ impl BalanceGuard {
                 actual: actual_delta,
                 diff,
             });
+        } else if diff > 0 && abs_diff > self.config.threshold_lamports {
+            // Log favorable variance but don't halt
+            tracing::info!(
+                "Favorable variance: gained {} more lamports than expected. Reason: {}",
+                diff, expected.reason
+            );
         }
 
         tracing::debug!("Balance delta OK: within {} lamport threshold", self.config.threshold_lamports);
@@ -413,5 +421,48 @@ mod tests {
 
         assert_eq!(guard.violations().len(), 1);
         assert!(guard.violations()[0].reason.contains("suspicious"));
+    }
+
+    #[test]
+    fn test_unexpected_gain_does_not_halt() {
+        let mut guard = create_test_guard();
+        guard.capture_pre_trade(1_000_000_000); // 1 SOL
+
+        // Expected to gain 0.1 SOL, actually gained 0.2 SOL (favorable variance)
+        let expected = ExpectedDelta::custom(100_000_000, "token->SOL swap");
+        let result = guard.validate_post_trade(1_200_000_000, &expected); // 1.2 SOL
+
+        // Should NOT halt on gains - this is favorable for the user
+        assert!(result.is_ok());
+        assert!(!guard.is_halted());
+        assert_eq!(guard.violations().len(), 0); // No violations for gains
+    }
+
+    #[test]
+    fn test_large_unexpected_gain_logs_but_passes() {
+        let mut guard = create_test_guard();
+        guard.capture_pre_trade(1_000_000_000); // 1 SOL
+
+        // Expected small gain, got massive gain (very favorable slippage)
+        let expected = ExpectedDelta::custom(10_000_000, "token->SOL"); // expect +0.01 SOL
+        let result = guard.validate_post_trade(2_000_000_000, &expected); // got +1 SOL!
+
+        // Even with huge favorable variance, should not halt
+        assert!(result.is_ok());
+        assert!(!guard.is_halted());
+    }
+
+    #[test]
+    fn test_loss_still_triggers_halt() {
+        let mut guard = create_test_guard();
+        guard.capture_pre_trade(1_000_000_000); // 1 SOL
+
+        // Expected to spend 0.1 SOL, actually lost 0.3 SOL (unexpected loss)
+        let expected = ExpectedDelta::custom(-100_000_000, "SOL->token swap");
+        let result = guard.validate_post_trade(700_000_000, &expected); // only 0.7 SOL left
+
+        // SHOULD halt on unexpected losses
+        assert!(result.is_err());
+        assert!(guard.is_halted());
     }
 }
