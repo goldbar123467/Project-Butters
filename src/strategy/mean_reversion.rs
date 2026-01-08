@@ -8,8 +8,8 @@
 //! - SHORT when z_score > +z_threshold (overbought)
 //!
 //! Exit Logic:
-//! - Exit LONG when z_score > +z_threshold OR take_profit OR stop_loss
-//! - Exit SHORT when z_score < -z_threshold OR take_profit OR stop_loss
+//! - Exit LONG when z_score > +z_exit_threshold OR take_profit OR stop_loss OR time_stop
+//! - Exit SHORT when z_score < -z_exit_threshold OR take_profit OR stop_loss OR time_stop
 
 use std::time::{Duration, Instant};
 
@@ -52,6 +52,8 @@ pub struct MeanReversionStrategy {
     position: PositionState,
     /// Last trade timestamp for cooldown
     last_trade_time: Option<Instant>,
+    /// Position entry timestamp for time-based exit
+    entry_time: Option<Instant>,
     /// Daily trade counter
     daily_trades: u32,
     /// Daily P&L tracking
@@ -67,6 +69,7 @@ impl MeanReversionStrategy {
             zscore_gate,
             position: PositionState::Flat,
             last_trade_time: None,
+            entry_time: None,
             daily_trades: 0,
             daily_pnl: 0.0,
         }
@@ -118,12 +121,20 @@ impl MeanReversionStrategy {
                 // Check exit conditions for long
                 let pnl_pct = (current_price - entry_price) / entry_price * 100.0;
 
+                // Check time-based exit first
+                if let Some(entry_time) = self.entry_time {
+                    let hours_elapsed = entry_time.elapsed().as_secs_f64() / 3600.0;
+                    if hours_elapsed >= self.config.risk.time_stop_hours {
+                        return TradeAction::Exit; // Time stop
+                    }
+                }
+
                 if pnl_pct >= self.config.risk.take_profit_pct {
                     TradeAction::Exit // Take profit
                 } else if pnl_pct <= -self.config.risk.stop_loss_pct {
                     TradeAction::Exit // Stop loss
-                } else if zscore.is_overbought(self.config.z_threshold) {
-                    TradeAction::Exit // Mean reversion exit
+                } else if zscore.is_overbought(self.config.z_exit_threshold) {
+                    TradeAction::Exit // Mean reversion exit (z-score crossed above exit threshold)
                 } else {
                     TradeAction::Hold
                 }
@@ -132,12 +143,20 @@ impl MeanReversionStrategy {
                 // Check exit conditions for short
                 let pnl_pct = (entry_price - current_price) / entry_price * 100.0;
 
+                // Check time-based exit first
+                if let Some(entry_time) = self.entry_time {
+                    let hours_elapsed = entry_time.elapsed().as_secs_f64() / 3600.0;
+                    if hours_elapsed >= self.config.risk.time_stop_hours {
+                        return TradeAction::Exit; // Time stop
+                    }
+                }
+
                 if pnl_pct >= self.config.risk.take_profit_pct {
                     TradeAction::Exit // Take profit
                 } else if pnl_pct <= -self.config.risk.stop_loss_pct {
                     TradeAction::Exit // Stop loss
-                } else if zscore.is_oversold(self.config.z_threshold) {
-                    TradeAction::Exit // Mean reversion exit
+                } else if zscore.is_oversold(self.config.z_exit_threshold) {
+                    TradeAction::Exit // Mean reversion exit (z-score crossed below exit threshold)
                 } else {
                     TradeAction::Hold
                 }
@@ -151,11 +170,13 @@ impl MeanReversionStrategy {
             TradeAction::EnterLong => {
                 self.position = PositionState::Long { entry_price: price };
                 self.last_trade_time = Some(Instant::now());
+                self.entry_time = Some(Instant::now());
                 self.daily_trades += 1;
             }
             TradeAction::EnterShort => {
                 self.position = PositionState::Short { entry_price: price };
                 self.last_trade_time = Some(Instant::now());
+                self.entry_time = Some(Instant::now());
                 self.daily_trades += 1;
             }
             TradeAction::Exit => {
@@ -172,6 +193,7 @@ impl MeanReversionStrategy {
                 self.daily_pnl += pnl;
                 self.position = PositionState::Flat;
                 self.last_trade_time = Some(Instant::now());
+                self.entry_time = None;
             }
             TradeAction::Hold => {}
         }
@@ -222,6 +244,7 @@ impl MeanReversionStrategy {
         self.zscore_gate.reset();
         self.position = PositionState::Flat;
         self.last_trade_time = None;
+        self.entry_time = None;
         self.daily_trades = 0;
         self.daily_pnl = 0.0;
     }

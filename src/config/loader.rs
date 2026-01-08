@@ -310,6 +310,7 @@ impl From<&Config> for crate::strategy::params::StrategyConfig {
         StrategyConfig {
             lookback_period: config.strategy.lookback_period,
             z_threshold: config.strategy.z_threshold,
+            z_exit_threshold: config.strategy.z_exit_threshold,
             cooldown_seconds: config.strategy.cooldown_seconds,
             risk: RiskConfig {
                 max_position_pct: config.risk.max_position_pct,
@@ -317,6 +318,7 @@ impl From<&Config> for crate::strategy::params::StrategyConfig {
                 take_profit_pct: config.risk.take_profit_pct,
                 max_daily_trades: config.risk.max_daily_trades,
                 max_daily_loss_pct: config.risk.max_daily_loss_pct,
+                time_stop_hours: config.risk.time_stop_hours as f64,
             },
             filters: FilterConfig {
                 min_volume_percentile: config.strategy.min_volume_percentile,
