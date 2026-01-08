@@ -4,13 +4,19 @@
 //! Main trading loop that fetches prices, updates strategy, and executes trades.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use thiserror::Error;
+use base64::Engine;
+use solana_sdk::transaction::VersionedTransaction;
 
 use crate::strategy::{MeanReversionStrategy, StrategyConfig, TradeAction, PositionState};
-use crate::adapters::jupiter::{JupiterClient, QuoteRequest};
+use crate::adapters::jupiter::{JupiterClient, QuoteRequest, SwapRequest};
 use crate::adapters::solana::{SolanaClient, WalletManager};
+use crate::domain::{
+    BalanceGuard, ExpectedDelta,
+    TransactionValidator,
+};
 
 #[derive(Debug, Error)]
 pub enum OrchestratorError {
@@ -22,6 +28,8 @@ pub enum OrchestratorError {
     ExecutionError(String),
     #[error("Wallet error: {0}")]
     WalletError(String),
+    #[error("Security violation: {0}")]
+    SecurityViolation(String),
 }
 
 /// Main trading orchestrator that coordinates strategy and execution
@@ -36,6 +44,12 @@ pub struct TradingOrchestrator {
     is_running: Arc<RwLock<bool>>,
     paper_mode: bool,
     poll_interval: Duration,
+    /// Trade size in SOL (e.g., 0.1 = trade 0.1 SOL per signal)
+    trade_size_sol: f64,
+    /// Priority fee in lamports for faster transaction inclusion
+    priority_fee_lamports: u64,
+    balance_guard: Arc<RwLock<BalanceGuard>>,
+    tx_validator: TransactionValidator,
 }
 
 /// Status snapshot of the orchestrator
@@ -60,6 +74,8 @@ impl TradingOrchestrator {
         quote_mint: String,
         slippage_bps: u16,
         paper_mode: bool,
+        trade_size_sol: f64,
+        priority_fee_lamports: u64,
     ) -> Result<Self, OrchestratorError> {
         let strategy = MeanReversionStrategy::new(strategy_config);
 
@@ -67,13 +83,17 @@ impl TradingOrchestrator {
             strategy: Arc::new(RwLock::new(strategy)),
             jupiter,
             solana,
-            wallet,
+            wallet: wallet.clone(),
             base_mint,
             quote_mint,
             slippage_bps,
             is_running: Arc::new(RwLock::new(false)),
             paper_mode,
             poll_interval: Duration::from_secs(10), // 10 second default poll
+            trade_size_sol,
+            priority_fee_lamports,
+            balance_guard: Arc::new(RwLock::new(BalanceGuard::new(wallet.pubkey()))),
+            tx_validator: TransactionValidator::new(wallet.pubkey()),
         })
     }
 
@@ -110,18 +130,42 @@ impl TradingOrchestrator {
         // 1. Fetch current price (use Jupiter quote for now)
         let price = self.fetch_price().await?;
 
-        // 2. Update strategy
-        let mut strategy = self.strategy.write().await;
-        let action = strategy.update(price);
+        // 2. Get action from strategy (does NOT update state yet)
+        let action = {
+            let mut strategy = self.strategy.write().await;
+            strategy.update(price)
+        };
 
         // 3. Execute if action needed
         if let Some(action) = action {
             match action {
                 TradeAction::EnterLong | TradeAction::EnterShort | TradeAction::Exit => {
-                    self.execute_trade(&action, price).await?;
+                    // Execute the trade
+                    match self.execute_trade(&action, price).await {
+                        Ok(()) => {
+                            // Trade succeeded - NOW update strategy state
+                            let mut strategy = self.strategy.write().await;
+                            strategy.confirm_trade(action, price);
+                            tracing::info!("Trade confirmed, strategy state updated");
+                        }
+                        Err(e) => {
+                            // Trade failed - DO NOT update state, will retry next tick
+                            tracing::error!(
+                                "Trade execution failed: {}. Position state unchanged, will retry.",
+                                e
+                            );
+                            // For exits, we don't propagate error - we want to keep trying
+                            if matches!(action, TradeAction::Exit) {
+                                tracing::warn!("Exit trade failed - will retry on next tick");
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                    }
                 }
                 TradeAction::Hold => {
                     // Get z-score for display
+                    let strategy = self.strategy.read().await;
                     let z_score = strategy.current_zscore()
                         .map(|z| z.z_score)
                         .unwrap_or(0.0);
@@ -165,10 +209,9 @@ impl TradingOrchestrator {
         Ok(price)
     }
 
-    /// Execute a trade action
+    /// Execute a trade action via Jupiter swap
     async fn execute_trade(&self, action: &TradeAction, price: f64) -> Result<(), OrchestratorError> {
         if self.paper_mode {
-            // Paper mode: just log the trade
             tracing::info!(
                 "PAPER TRADE - Action: {:?}, Price: ${:.2}",
                 action,
@@ -177,21 +220,321 @@ impl TradingOrchestrator {
             return Ok(());
         }
 
-        // Real execution would go here
         tracing::info!(
             "EXECUTING TRADE - Action: {:?}, Price: ${:.2}",
             action,
             price
         );
 
-        // TODO: Implement real execution via Jupiter swap
-        // 1. Get quote for the trade size
-        // 2. Build swap transaction
-        // 3. Sign with wallet
-        // 4. Submit to Solana
-        // 5. Confirm transaction
+        // 1. Check if trading is halted due to balance anomaly
+        if self.balance_guard.read().await.is_halted() {
+            return Err(OrchestratorError::ExecutionError(
+                "Trading halted due to balance anomaly - manual review required".to_string()
+            ));
+        }
+
+        // 2. Capture pre-trade balance
+        let pre_balance = self.solana.get_rpc_client().get_balance(&self.wallet.pubkey())
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Failed to get balance: {}", e)))?;
+        self.balance_guard.write().await.capture_pre_trade(pre_balance);
+
+        // 3. Determine swap direction and amount based on action
+        let (input_mint, output_mint, amount) = self.get_swap_params(action, price).await?;
+
+        if amount == 0 {
+            tracing::warn!("Trade amount is zero, skipping");
+            return Ok(());
+        }
+
+        // 4. Get quote from Jupiter
+        let quote_request = QuoteRequest::new(
+            input_mint.clone(),
+            output_mint.clone(),
+            amount,
+            self.slippage_bps,
+        );
+
+        tracing::info!(
+            "Requesting quote: {} {} -> {}",
+            amount, input_mint, output_mint
+        );
+
+        let quote = self.jupiter.get_quote(&quote_request).await
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Quote failed: {}", e)))?;
+
+        let in_amount = quote.input_amount();
+        let out_amount = quote.output_amount();
+        let price_impact = quote.price_impact();
+
+        tracing::info!(
+            "Quote received: {} -> {} (impact: {:.4}%)",
+            in_amount, out_amount, price_impact
+        );
+
+        // Check price impact isn't too high
+        if price_impact > 1.0 {
+            tracing::warn!("Price impact too high ({:.2}%), aborting trade", price_impact);
+            return Err(OrchestratorError::ExecutionError(
+                format!("Price impact {:.2}% exceeds 1% limit", price_impact)
+            ));
+        }
+
+        // 3. Build swap transaction via Jupiter
+        let quote_json = serde_json::to_value(&quote)
+            .map_err(|e| OrchestratorError::ExecutionError(format!("JSON serialize failed: {}", e)))?;
+
+        let swap_request = SwapRequest::new(
+            self.wallet.public_key(),
+            quote_json,
+        ).with_priority_fee(self.priority_fee_lamports);
+
+        tracing::info!("Building swap transaction...");
+
+        let swap_response = self.jupiter.get_swap_transaction(&swap_request).await
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Swap build failed: {}", e)))?;
+
+        // 4. Decode base64 transaction
+        let tx_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&swap_response.swap_transaction)
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Base64 decode failed: {}", e)))?;
+
+        // 5. Deserialize to VersionedTransaction
+        let transaction: VersionedTransaction = bincode::deserialize(&tx_bytes)
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Deserialize failed: {}", e)))?;
+
+        // SECURITY: Validate transaction before signing
+        let validation_result = self.tx_validator.validate(&transaction)
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Transaction validation failed: {:?}", e)))?;
+
+        tracing::info!(
+            "Transaction validated: {} transfers, {} CloseAccount instructions - all destinations authorized",
+            validation_result.transfer_count,
+            validation_result.close_account_count
+        );
+
+        tracing::info!(
+            "Transaction built, {} signatures needed, block height limit: {}",
+            transaction.message.header().num_required_signatures,
+            swap_response.last_valid_block_height
+        );
+
+        // 6. Sign the transaction
+        let signed_tx = self.sign_versioned_transaction(transaction)?;
+
+        // 7. Submit to Solana and confirm
+        tracing::info!("Submitting transaction to Solana...");
+
+        let signature = self.submit_and_confirm_transaction(&signed_tx).await?;
+
+        tracing::info!(
+            "✅ TRADE EXECUTED - Signature: {}",
+            signature
+        );
+        tracing::info!(
+            "   View: https://solscan.io/tx/{}",
+            signature
+        );
+
+        // Validate balance delta
+        let post_balance = self.solana.get_rpc_client().get_balance(&self.wallet.pubkey())
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Failed to get post-trade balance: {}", e)))?;
+
+        let expected_delta = ExpectedDelta::custom(
+            -(in_amount as i64) - (swap_response.prioritization_fee_lamports as i64),
+            format!("Swap {} -> {}", input_mint, output_mint)
+        );
+
+        if let Err(e) = self.balance_guard.write().await.validate_post_trade(post_balance, &expected_delta) {
+            tracing::error!("Balance guard violation: {:?}", e);
+            // Don't return error - trade already executed, just log the warning
+        }
 
         Ok(())
+    }
+
+    /// Determine swap parameters based on trade action
+    async fn get_swap_params(&self, action: &TradeAction, price: f64) -> Result<(String, String, u64), OrchestratorError> {
+        match action {
+            TradeAction::EnterLong => {
+                // Buy SOL with USDC: USDC -> SOL
+                let usdc_amount = (self.trade_size_sol * price * 1_000_000.0) as u64;
+                Ok((self.quote_mint.clone(), self.base_mint.clone(), usdc_amount))
+            }
+            TradeAction::EnterShort => {
+                // Sell SOL for USDC: SOL -> USDC
+                let sol_amount = (self.trade_size_sol * 1_000_000_000.0) as u64;
+                Ok((self.base_mint.clone(), self.quote_mint.clone(), sol_amount))
+            }
+            TradeAction::Exit => {
+                // Exit depends on current position
+                let strategy = self.strategy.read().await;
+                match strategy.position() {
+                    PositionState::Long { .. } => {
+                        // Exit long = sell SOL
+                        let sol_amount = (self.trade_size_sol * 1_000_000_000.0) as u64;
+                        Ok((self.base_mint.clone(), self.quote_mint.clone(), sol_amount))
+                    }
+                    PositionState::Short { .. } => {
+                        // Exit short = buy SOL
+                        let usdc_amount = (self.trade_size_sol * price * 1_000_000.0) as u64;
+                        Ok((self.quote_mint.clone(), self.base_mint.clone(), usdc_amount))
+                    }
+                    PositionState::Flat => {
+                        tracing::warn!("Exit called but position is flat");
+                        Ok((String::new(), String::new(), 0))
+                    }
+                }
+            }
+            TradeAction::Hold => {
+                Ok((String::new(), String::new(), 0))
+            }
+        }
+    }
+
+    /// Sign a VersionedTransaction with our wallet
+    fn sign_versioned_transaction(&self, mut transaction: VersionedTransaction) -> Result<VersionedTransaction, OrchestratorError> {
+        use solana_sdk::signature::Signer;
+
+        // Get the message bytes to sign
+        let message_bytes = transaction.message.serialize();
+
+        // Sign with our keypair
+        let signature = self.wallet.keypair().sign_message(&message_bytes);
+
+        // The first signature slot is for the fee payer (our wallet)
+        if transaction.signatures.is_empty() {
+            return Err(OrchestratorError::ExecutionError(
+                "Transaction has no signature slots".to_string()
+            ));
+        }
+
+        transaction.signatures[0] = signature;
+
+        tracing::debug!("Transaction signed with signature: {}", signature);
+
+        Ok(transaction)
+    }
+
+    /// Submit transaction to Solana and wait for confirmation with timeout
+    async fn submit_and_confirm_transaction(&self, transaction: &VersionedTransaction) -> Result<String, OrchestratorError> {
+        use solana_client::rpc_config::RpcSendTransactionConfig;
+        use solana_sdk::commitment_config::CommitmentLevel;
+        use solana_sdk::signature::Signature;
+        use std::str::FromStr;
+
+        // Timeout configuration
+        const SEND_TIMEOUT_SECS: u64 = 30;
+        const CONFIRM_TIMEOUT_SECS: u64 = 60;
+        const POLL_INTERVAL_MS: u64 = 500;
+
+        // Serialize the signed transaction
+        let tx_bytes = bincode::serialize(transaction)
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Serialize failed: {}", e)))?;
+
+        let tx_base64 = base64::engine::general_purpose::STANDARD.encode(&tx_bytes);
+        let client = self.solana.get_rpc_client();
+
+        // Step 1: Send transaction with timeout
+        let send_result = tokio::time::timeout(
+            Duration::from_secs(SEND_TIMEOUT_SECS),
+            tokio::task::spawn_blocking({
+                let tx_base64 = tx_base64.clone();
+                let client = Arc::clone(&client);
+                move || {
+                    let tx_bytes = base64::engine::general_purpose::STANDARD
+                        .decode(&tx_base64)
+                        .map_err(|e| OrchestratorError::ExecutionError(e.to_string()))?;
+
+                    let transaction: VersionedTransaction = bincode::deserialize(&tx_bytes)
+                        .map_err(|e| OrchestratorError::ExecutionError(e.to_string()))?;
+
+                    let config = RpcSendTransactionConfig {
+                        skip_preflight: true,
+                        preflight_commitment: Some(CommitmentLevel::Confirmed),
+                        max_retries: Some(3),
+                        ..Default::default()
+                    };
+
+                    client
+                        .send_transaction_with_config(&transaction, config)
+                        .map(|sig| sig.to_string())
+                        .map_err(|e| OrchestratorError::ExecutionError(format!("Send failed: {}", e)))
+                }
+            })
+        ).await;
+
+        let signature = match send_result {
+            Ok(Ok(Ok(sig))) => sig,
+            Ok(Ok(Err(e))) => return Err(e),
+            Ok(Err(e)) => return Err(OrchestratorError::ExecutionError(format!("Task join error: {}", e))),
+            Err(_) => return Err(OrchestratorError::ExecutionError(format!("Send timeout after {}s", SEND_TIMEOUT_SECS))),
+        };
+
+        tracing::info!("Transaction sent: {}", signature);
+
+        // Step 2: Poll for confirmation with timeout
+        let start = Instant::now();
+        let confirm_timeout = Duration::from_secs(CONFIRM_TIMEOUT_SECS);
+        let poll_interval = Duration::from_millis(POLL_INTERVAL_MS);
+
+        let sig = Signature::from_str(&signature)
+            .map_err(|e| OrchestratorError::ExecutionError(format!("Invalid signature: {}", e)))?;
+
+        loop {
+            // Check total timeout
+            if start.elapsed() > confirm_timeout {
+                tracing::error!(
+                    "Confirmation timeout after {}s. Transaction may still land. Signature: {}",
+                    CONFIRM_TIMEOUT_SECS,
+                    signature
+                );
+                return Err(OrchestratorError::ExecutionError(
+                    format!("Confirmation timeout after {}s. Signature: {}", CONFIRM_TIMEOUT_SECS, signature)
+                ));
+            }
+
+            // Poll signature status with individual timeout
+            let client_clone = Arc::clone(&client);
+            let sig_clone = sig;
+
+            let status_result = tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::task::spawn_blocking(move || {
+                    client_clone.get_signature_status(&sig_clone)
+                })
+            ).await;
+
+            match status_result {
+                Ok(Ok(Ok(Some(result)))) => {
+                    if result.is_ok() {
+                        tracing::debug!("Transaction confirmed after {:.1}s", start.elapsed().as_secs_f64());
+                        return Ok(signature);
+                    } else {
+                        return Err(OrchestratorError::ExecutionError(
+                            format!("Transaction failed on-chain: {:?}", result.err())
+                        ));
+                    }
+                }
+                Ok(Ok(Ok(None))) => {
+                    // Not yet confirmed, continue polling
+                    tracing::debug!(
+                        "Waiting for confirmation... ({:.1}s elapsed)",
+                        start.elapsed().as_secs_f64()
+                    );
+                }
+                Ok(Ok(Err(e))) => {
+                    tracing::warn!("RPC error during confirmation poll: {}", e);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Task error during confirmation poll: {}", e);
+                }
+                Err(_) => {
+                    tracing::debug!("Individual poll timed out, retrying...");
+                }
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
     }
 
     /// Stop the trading loop
@@ -251,6 +594,10 @@ impl Clone for TradingOrchestrator {
             is_running: Arc::clone(&self.is_running),
             paper_mode: self.paper_mode,
             poll_interval: self.poll_interval,
+            trade_size_sol: self.trade_size_sol,
+            priority_fee_lamports: self.priority_fee_lamports,
+            balance_guard: Arc::clone(&self.balance_guard),
+            tx_validator: self.tx_validator.clone(),
         }
     }
 }
@@ -273,8 +620,10 @@ mod tests {
             wallet,
             "So11111111111111111111111111111111111111112".to_string(), // SOL
             "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".to_string(), // USDC
-            50, // 0.5% slippage
-            true, // paper mode
+            50,    // 0.5% slippage
+            true,  // paper mode
+            0.1,   // trade 0.1 SOL per signal
+            5000,  // 5000 lamports priority fee
         ).unwrap()
     }
 
