@@ -35,10 +35,11 @@ max_position_pct = 5.0
 # Stop loss percentage (0.5% = tight for mean reversion)
 stop_loss_pct = 0.5
 
-# Take profit percentage (1.0% = better R:R ratio)
-# With 0.3% fees: net win +0.7%, net loss -0.8%
-# Break-even win rate: 53.3% (achievable at z=1.8)
-take_profit_pct = 1.0
+# Take profit percentage (0.8% = realistic for SOL volatility)
+# With 0.3% fees: net win +0.5%, net loss -0.8%
+# Break-even win rate: 61.5% | Expected win rate ~70% at z=1.8
+# NOTE: Requires candle aggregation fix to achieve 2.25hr lookback
+take_profit_pct = 0.8
 
 # Maximum trades per day
 max_daily_trades = 20
