@@ -23,7 +23,7 @@ pub mod tip_accounts {
     /// Official Jito tip accounts (validators rotate through these)
     pub const TIP_ACCOUNTS: &[&str] = &[
         "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
-        "HFqU5x63VTqvQss8hp11i4bVmkdzGZBJLYQ6QwBvp8dx",
+        "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
         "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
         "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
         "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",

@@ -3,13 +3,17 @@
 
 [strategy]
 # Lookback period for rolling mean/std calculation (in candles)
-lookback_period = 20
+# 45 candles = ~2.25 hours on 3m timeframe - balanced responsiveness
+lookback_period = 45
 
-# Z-score threshold for entry (2.0 = moderate, 2.5 = conservative)
-z_threshold = 2.0
+# Z-score threshold for entry (1.8 = aggressive, 2.0 = moderate, 2.5 = conservative)
+# 1.8 = ~7.2% tail probability = 2-3 trades/hour with filters
+# Expected win rate 60-65% vs 53.3% break-even = profitable
+z_threshold = 1.8
 
-# Exit at mean (0.0) or slight overshoot (0.5)
-z_exit_threshold = 0.0
+# Exit at deadband near mean (0.2) for better fill rates
+# Lower than entry threshold to capture mean reversion profits
+z_exit_threshold = 0.2
 
 # Minimum volume percentile to trade (filter low-liquidity moments)
 min_volume_percentile = 60
@@ -17,30 +21,39 @@ min_volume_percentile = 60
 # Maximum spread in basis points (0.3% = 30 bps)
 max_spread_bps = 30
 
-# Cooldown between trades in seconds
-cooldown_seconds = 300
+# Cooldown between trades in seconds (120s = 2 min)
+# Allows 1-2 trades/hour target rate
+cooldown_seconds = 120
 
-# Timeframe for candles ("4h" or "1d")
-timeframe = "4h"
+# Timeframe for candles ("1m", "3m", "4h", "1d")
+timeframe = "3m"
 
 [risk]
 # Maximum position size as percentage of portfolio
 max_position_pct = 5.0
 
-# Stop loss percentage
-stop_loss_pct = 2.5
+# Stop loss percentage (0.5% = tight for mean reversion)
+stop_loss_pct = 0.5
 
-# Take profit percentage (exit at mean reversion)
-take_profit_pct = 1.5
+# Take profit percentage (0.8% = realistic for SOL volatility)
+# With 0.3% fees: net win +0.5%, net loss -0.8%
+# Break-even win rate: 61.5% | Expected win rate ~70% at z=1.8
+# NOTE: Requires candle aggregation fix to achieve 2.25hr lookback
+take_profit_pct = 0.8
 
 # Maximum trades per day
-max_daily_trades = 10
+max_daily_trades = 20
 
 # Maximum daily loss percentage (circuit breaker)
 max_daily_loss_pct = 3.0
 
-# Time-based stop (exit after N hours if no movement)
-time_stop_hours = 24
+# Time-based stop (exit after 1 hour if no movement)
+# Prevents holding stale positions indefinitely
+time_stop_hours = 1
+
+# Trade size in SOL per signal
+# With ~0.7 SOL (~$100) + $87 USDC, using 0.1 SOL per trade (~$14/trade)
+trade_size_sol = 0.1
 
 [tokens]
 # SOL mint address

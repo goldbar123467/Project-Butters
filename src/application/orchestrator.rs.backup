@@ -14,8 +14,8 @@ use crate::strategy::{MeanReversionStrategy, StrategyConfig, TradeAction, Positi
 use crate::adapters::jupiter::{JupiterClient, QuoteRequest, SwapRequest};
 use crate::adapters::solana::{SolanaClient, WalletManager};
 use crate::domain::{
-    BalanceGuard, ExpectedDelta,
-    TransactionValidator,
+    BalanceGuard, BalanceGuardError, ExpectedDelta,
+    TransactionValidator, TxValidationError, TxValidationResult,
 };
 
 #[derive(Debug, Error)]
@@ -49,7 +49,6 @@ pub struct TradingOrchestrator {
     /// Priority fee in lamports for faster transaction inclusion
     priority_fee_lamports: u64,
     balance_guard: Arc<RwLock<BalanceGuard>>,
-    tx_validator: TransactionValidator,
 }
 
 /// Status snapshot of the orchestrator
@@ -93,7 +92,6 @@ impl TradingOrchestrator {
             trade_size_sol,
             priority_fee_lamports,
             balance_guard: Arc::new(RwLock::new(BalanceGuard::new(wallet.pubkey()))),
-            tx_validator: TransactionValidator::new(wallet.pubkey()),
         })
     }
 
@@ -302,26 +300,6 @@ impl TradingOrchestrator {
         let transaction: VersionedTransaction = bincode::deserialize(&tx_bytes)
             .map_err(|e| OrchestratorError::ExecutionError(format!("Deserialize failed: {}", e)))?;
 
-        // SECURITY: Validate transaction before signing (WARNING ONLY - relies on BalanceGuard post-trade)
-        // NOTE: Disabled blocking validation because Jupiter transactions include dynamic PDAs
-        // (pool vaults, routing accounts) that cannot be statically whitelisted.
-        // The BalanceGuard provides post-trade protection by detecting unexpected balance changes.
-        match self.tx_validator.validate(&transaction) {
-            Ok(result) => {
-                tracing::info!(
-                    "Transaction validated: {} transfers, {} CloseAccount instructions - all destinations authorized",
-                    result.transfer_count,
-                    result.close_account_count
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Transaction validation warning (proceeding anyway): {:?}. BalanceGuard will verify post-trade.",
-                    e
-                );
-            }
-        }
-
         tracing::info!(
             "Transaction built, {} signatures needed, block height limit: {}",
             transaction.message.header().num_required_signatures,
@@ -349,30 +327,10 @@ impl TradingOrchestrator {
         let post_balance = self.solana.get_rpc_client().get_balance(&self.wallet.pubkey())
             .map_err(|e| OrchestratorError::ExecutionError(format!("Failed to get post-trade balance: {}", e)))?;
 
-        // Calculate expected delta based on swap direction
-        const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
-
-        let expected_delta = if output_mint == SOL_MINT {
-            // Token → SOL: We RECEIVE SOL (positive delta)
-            ExpectedDelta::token_to_sol(
-                out_amount,
-                swap_response.prioritization_fee_lamports,
-                0  // jito tip handled separately if enabled
-            )
-        } else if input_mint == SOL_MINT {
-            // SOL → Token: We SPEND SOL (negative delta)
-            ExpectedDelta::sol_to_token(
-                in_amount,
-                swap_response.prioritization_fee_lamports,
-                0
-            )
-        } else {
-            // Token → Token: Only fees affect SOL balance
-            ExpectedDelta::custom(
-                -(swap_response.prioritization_fee_lamports as i64) - 5000,
-                format!("Swap {} -> {} (fees only)", input_mint, output_mint)
-            )
-        };
+        let expected_delta = ExpectedDelta::custom(
+            -(in_amount as i64) - (swap_response.prioritization_fee_lamports as i64),
+            format!("Swap {} -> {}", input_mint, output_mint)
+        );
 
         if let Err(e) = self.balance_guard.write().await.validate_post_trade(post_balance, &expected_delta) {
             tracing::error!("Balance guard violation: {:?}", e);
@@ -627,7 +585,6 @@ impl Clone for TradingOrchestrator {
             trade_size_sol: self.trade_size_sol,
             priority_fee_lamports: self.priority_fee_lamports,
             balance_guard: Arc::clone(&self.balance_guard),
-            tx_validator: self.tx_validator.clone(),
         }
     }
 }

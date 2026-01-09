@@ -12,6 +12,9 @@ pub struct StrategyConfig {
     pub lookback_period: usize,
     /// Z-score threshold for entry signals (e.g., 2.5 = 2.5 std devs)
     pub z_threshold: f64,
+    /// Z-score threshold for exit signals (e.g., 0.2 = deadband near mean)
+    /// When z-score crosses this threshold toward mean, exit position
+    pub z_exit_threshold: f64,
     /// Minimum seconds between trades
     pub cooldown_seconds: u64,
     /// Risk management settings
@@ -25,6 +28,7 @@ impl Default for StrategyConfig {
         Self {
             lookback_period: 50,
             z_threshold: 2.5,
+            z_exit_threshold: 0.2, // deadband near mean
             cooldown_seconds: 300, // 5 minutes
             risk: RiskConfig::default(),
             filters: FilterConfig::default(),
@@ -45,6 +49,12 @@ impl StrategyConfig {
         self
     }
 
+    /// Create a new config with custom z-exit threshold
+    pub fn with_z_exit_threshold(mut self, threshold: f64) -> Self {
+        self.z_exit_threshold = threshold;
+        self
+    }
+
     /// Validate configuration parameters
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.lookback_period < 10 {
@@ -52,6 +62,9 @@ impl StrategyConfig {
         }
         if self.z_threshold <= 0.0 || self.z_threshold > 5.0 {
             return Err(ConfigError::InvalidZThreshold(self.z_threshold));
+        }
+        if self.z_exit_threshold < 0.0 || self.z_exit_threshold >= self.z_threshold {
+            return Err(ConfigError::InvalidZExitThreshold(self.z_exit_threshold));
         }
         self.risk.validate()?;
         self.filters.validate()?;
@@ -72,6 +85,8 @@ pub struct RiskConfig {
     pub max_daily_trades: u32,
     /// Maximum daily loss as percentage of portfolio
     pub max_daily_loss_pct: f64,
+    /// Time-based stop in hours (exit after N hours if no movement)
+    pub time_stop_hours: f64,
 }
 
 impl Default for RiskConfig {
@@ -82,6 +97,7 @@ impl Default for RiskConfig {
             take_profit_pct: 1.5,
             max_daily_trades: 10,
             max_daily_loss_pct: 3.0,
+            time_stop_hours: 24.0,
         }
     }
 }
@@ -96,6 +112,9 @@ impl RiskConfig {
         }
         if self.take_profit_pct <= 0.0 || self.take_profit_pct > 100.0 {
             return Err(ConfigError::InvalidTakeProfit(self.take_profit_pct));
+        }
+        if self.time_stop_hours <= 0.0 {
+            return Err(ConfigError::InvalidTimeStop(self.time_stop_hours));
         }
         Ok(())
     }
@@ -138,12 +157,16 @@ pub enum ConfigError {
     InvalidLookback(usize),
     #[error("Invalid z-threshold: {0} (must be 0 < z <= 5)")]
     InvalidZThreshold(f64),
+    #[error("Invalid z-exit threshold: {0} (must be >= 0 and < z_threshold)")]
+    InvalidZExitThreshold(f64),
     #[error("Invalid position size: {0}% (must be 0 < size <= 100)")]
     InvalidPositionSize(f64),
     #[error("Invalid stop loss: {0}% (must be 0 < loss <= 50)")]
     InvalidStopLoss(f64),
     #[error("Invalid take profit: {0}% (must be 0 < profit <= 100)")]
     InvalidTakeProfit(f64),
+    #[error("Invalid time stop: {0} hours (must be > 0)")]
+    InvalidTimeStop(f64),
     #[error("Invalid volume filter: {0} (must be 0-100)")]
     InvalidVolumeFilter(f64),
     #[error("Invalid spread filter: {0} bps (max 500)")]
@@ -159,6 +182,7 @@ mod tests {
         let config = StrategyConfig::default();
         assert_eq!(config.lookback_period, 50);
         assert_eq!(config.z_threshold, 2.5);
+        assert_eq!(config.z_exit_threshold, 0.2);
         assert_eq!(config.cooldown_seconds, 300);
         assert!(config.validate().is_ok());
     }
@@ -167,8 +191,10 @@ mod tests {
     fn test_config_builder() {
         let config = StrategyConfig::default()
             .with_z_threshold(2.0)
+            .with_z_exit_threshold(0.5)
             .with_lookback(30);
         assert_eq!(config.z_threshold, 2.0);
+        assert_eq!(config.z_exit_threshold, 0.5);
         assert_eq!(config.lookback_period, 30);
     }
 
@@ -187,6 +213,26 @@ mod tests {
 
         config.z_threshold = 6.0;
         assert!(matches!(config.validate(), Err(ConfigError::InvalidZThreshold(_))));
+    }
+
+    #[test]
+    fn test_invalid_z_exit_threshold() {
+        let mut config = StrategyConfig::default();
+
+        // Test negative value
+        config.z_exit_threshold = -0.1;
+        assert!(matches!(config.validate(), Err(ConfigError::InvalidZExitThreshold(_))));
+
+        // Test value >= z_threshold
+        config.z_exit_threshold = 2.5; // equal to z_threshold
+        assert!(matches!(config.validate(), Err(ConfigError::InvalidZExitThreshold(_))));
+
+        config.z_exit_threshold = 3.0; // greater than z_threshold
+        assert!(matches!(config.validate(), Err(ConfigError::InvalidZExitThreshold(_))));
+
+        // Test valid value
+        config.z_exit_threshold = 0.5;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

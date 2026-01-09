@@ -36,6 +36,11 @@ impl SolanaClient {
         Self { client }
     }
 
+    /// Get a reference to the underlying RPC client
+    pub fn get_rpc_client(&self) -> Arc<RpcClient> {
+        Arc::clone(&self.client)
+    }
+
     /// Get SOL balance for a public key
     pub async fn get_balance(&self, pubkey: &str) -> Result<u64, SolanaClientError> {
         let pubkey = solana_sdk::pubkey::Pubkey::from_str(pubkey)

@@ -366,3 +366,138 @@ When running as self-looping agent:
 3. If errors, fix before proceeding
 4. Write tests alongside implementation
 5. Integration test on devnet before mainnet wiring
+
+---
+
+## 🚨 CIRCUIT BREAKER Protocol (MANDATORY)
+
+**Before ANY code changes**, check if trading is halted:
+
+```bash
+# Check guard status
+cat data/guard_status.json 2>/dev/null || echo "No guard status file"
+```
+
+### Rules
+1. If `is_halted: true` → **STOP ALL WORK**
+2. Send `[BLOCKED]` message to all agents immediately
+3. Investigate the halt reason before proceeding
+4. Do NOT resume coding until halt is resolved
+
+### Emergency Keywords
+If you see these in logs or output, **halt immediately**:
+- `SECURITY: Unauthorized`
+- `Trading halted`
+- `Balance anomaly`
+- `MEV protection required - trade NOT executed`
+- `BalanceGuard violation`
+
+### On Emergency
+```
+Subject: [BLOCKED] Trading halted - {reason}
+Body: Guard status shows halt. All agents stop work until resolved.
+```
+
+---
+
+## 🔧 DevOps Handoff Protocol (MANDATORY)
+
+### Canonical Startup
+**ALWAYS use `./start-live.sh`** - never use other scripts:
+- ❌ `run-live.sh` - bare bones, missing safety checks
+- ❌ `start.sh` - tmux wrapper, inconsistent
+- ✅ `./start-live.sh` - full safety checks, MEV protection, logging
+
+### Before Handoff - Check State
+```bash
+# Is bot running?
+pgrep -f "butters run" && echo "RUNNING" || echo "STOPPED"
+
+# What mode?
+grep -q 'paper_mode = true' config.toml && echo "PAPER" || echo "LIVE"
+
+# Latest log?
+ls -t logs/*.log | head -1
+```
+
+### Handoff Message Format
+```
+Subject: [HANDOFF:DEVOPS] {task description}
+Body:
+- Bot Status: RUNNING/STOPPED
+- Mode: PAPER/LIVE
+- Config: config.toml
+- Latest Log: logs/butters-YYYYMMDD-HHMMSS.log
+- Action Needed: {what next agent should do}
+```
+
+### Before Code Changes
+```bash
+# Stop bot first
+pkill -f "butters run" || true
+```
+
+### After Changes
+```bash
+cargo test  # Run all 179 tests
+./start-live.sh  # Restart with full safety checks
+```
+
+---
+
+## 🛡️ TRADE GUARD Protocol (MANDATORY)
+
+This bot handles **REAL SOL on mainnet**. These safety systems exist - know them before editing.
+
+### BalanceGuard Flow (NEVER SKIP)
+```
+capture_pre_trade() → execute trade → validate_post_trade()
+```
+
+| Function | Location | Purpose |
+|----------|----------|---------|
+| `capture_pre_trade()` | `balance_guard.rs` | Snapshot SOL balance before trade |
+| `validate_post_trade()` | `balance_guard.rs` | Verify no unexpected losses |
+| `is_halted()` | `balance_guard.rs` | Check if trading stopped |
+
+**If you skip `validate_post_trade()`, unexpected losses go undetected.**
+
+### Fail-Closed Jito Policy
+```rust
+// If Jito fails, trade MUST NOT execute
+// NO silent fallback to direct RPC
+// Search for "FAIL CLOSED" comments before changes
+```
+
+### Orchestrator State Machine
+| Rule | Description |
+|------|-------------|
+| `update()` | Returns action but DOES NOT change state |
+| `confirm_trade()` | Called ONLY after on-chain confirmation |
+| Exit trades | Always retry on failure |
+| Entry trades | Fail fast, don't retry |
+
+### Danger Zones (Extra Review Required)
+| File | Lines | Risk |
+|------|-------|------|
+| `orchestrator.rs` | 200-350 | Trade execution flow |
+| `balance_guard.rs` | 50-150 | Threshold calculations |
+| `tx_validator.rs` | All | Transaction security |
+| `known_programs.rs` | All | Whitelist security |
+
+### File Reservations for Safety Code
+Before editing these files, **reserve them for 2+ hours**:
+```
+src/application/orchestrator.rs  - ALWAYS reserve first
+src/domain/balance_guard.rs      - Security critical
+src/adapters/jito/tx_validator.rs - Security critical
+src/adapters/jito/known_programs.rs - Whitelist
+```
+
+### Pre-Edit Checklist
+- [ ] Read the file completely first
+- [ ] Understand BalanceGuard flow
+- [ ] Check for "FAIL CLOSED" comments
+- [ ] Reserve file via Agent Mail
+- [ ] Run `cargo test` before AND after changes
+- [ ] Test on paper mode before live
