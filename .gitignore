@@ -17,7 +17,14 @@ secrets.toml
 
 # Wallet files - NEVER commit!
 id.json
+*.json.bak
 *-keypair.json
+**/wallets/**
+*.keypair
+wallet.json
+wallet*.json
+trading-wallet.json
+/opt/solana/
 
 # Logs
 logs/
@@ -29,3 +36,10 @@ Thumbs.db
 
 # Testing
 *.profraw
+
+# Runtime data
+data/
+guard_status.json
+
+# Claude Flow metrics (runtime)
+.claude-flow/metrics/
