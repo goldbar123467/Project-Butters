@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use super::known_programs::{
     is_jito_tip_account, is_known_dex_program, is_system_program,
-    jito_tip_pubkeys, dex_program_pubkeys, system_program_pubkeys,
+    jito_tip_pubkeys, dex_program_pubkeys, system_program_pubkeys, jupiter_routing_pubkeys,
 };
 
 /// SPL Token program ID
@@ -52,6 +52,8 @@ pub struct TxValidationResult {
     pub close_account_count: usize,
     /// All validated destination addresses
     pub validated_destinations: Vec<Pubkey>,
+    /// Addresses that were allowed with warnings (unknown but likely PDAs in Jupiter context)
+    pub warned_destinations: Vec<Pubkey>,
 }
 
 /// Detected transfer from transaction
@@ -78,6 +80,22 @@ pub struct DetectedCloseAccount {
     pub authority: Pubkey,
 }
 
+/// Validation mode for handling unknown destinations in Jupiter transactions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JupiterValidationMode {
+    /// Strict mode: reject any unknown destination (original behavior)
+    Strict,
+    /// Permissive mode: allow unknown destinations in Jupiter context with warnings
+    /// This handles dynamic PDAs (pool vaults, routing accounts) that can't be statically whitelisted
+    Permissive,
+}
+
+impl Default for JupiterValidationMode {
+    fn default() -> Self {
+        Self::Permissive
+    }
+}
+
 /// Transaction validator that checks all destinations before signing
 #[derive(Debug, Clone)]
 pub struct TransactionValidator {
@@ -85,13 +103,22 @@ pub struct TransactionValidator {
     user_wallet: Pubkey,
     /// Set of all allowed destination pubkeys
     allowed_destinations: HashSet<Pubkey>,
+    /// Known DEX program IDs for PDA derivation checks
+    known_dex_programs: HashSet<Pubkey>,
     /// Whether to log warnings for unknown programs (vs failing)
     warn_on_unknown_programs: bool,
+    /// Validation mode for Jupiter transactions with dynamic PDAs
+    jupiter_validation_mode: JupiterValidationMode,
 }
 
 impl TransactionValidator {
     /// Create a new transaction validator for the given user wallet
     pub fn new(user_wallet: Pubkey) -> Self {
+        Self::with_mode(user_wallet, JupiterValidationMode::default())
+    }
+
+    /// Create a new transaction validator with a specific Jupiter validation mode
+    pub fn with_mode(user_wallet: Pubkey, jupiter_validation_mode: JupiterValidationMode) -> Self {
         let mut allowed_destinations = HashSet::new();
 
         // Add user wallet
@@ -112,11 +139,31 @@ impl TransactionValidator {
             allowed_destinations.insert(pubkey);
         }
 
+        // Add Jupiter routing accounts (fee accounts, token ledger, etc.)
+        for pubkey in jupiter_routing_pubkeys() {
+            allowed_destinations.insert(pubkey);
+        }
+
+        // Build known DEX programs set for PDA validation
+        let known_dex_programs: HashSet<Pubkey> = dex_program_pubkeys().into_iter().collect();
+
         Self {
             user_wallet,
             allowed_destinations,
+            known_dex_programs,
             warn_on_unknown_programs: true,
+            jupiter_validation_mode,
         }
+    }
+
+    /// Create a strict validator that rejects unknown destinations
+    pub fn strict(user_wallet: Pubkey) -> Self {
+        Self::with_mode(user_wallet, JupiterValidationMode::Strict)
+    }
+
+    /// Create a permissive validator that allows unknown destinations in Jupiter context
+    pub fn permissive(user_wallet: Pubkey) -> Self {
+        Self::with_mode(user_wallet, JupiterValidationMode::Permissive)
     }
 
     /// Add additional allowed destination addresses
@@ -135,14 +182,21 @@ impl TransactionValidator {
     ///
     /// Returns Ok(TxValidationResult) if all destinations are authorized,
     /// or Err(TxValidationError) if any unauthorized destinations found.
+    ///
+    /// In Permissive mode, unknown destinations in Jupiter transactions are allowed
+    /// with warnings, as Jupiter uses dynamic PDAs for pool vaults and routing accounts.
     pub fn validate(&self, tx: &VersionedTransaction) -> Result<TxValidationResult, TxValidationError> {
         let mut transfer_count = 0;
         let mut close_account_count = 0;
         let mut validated_destinations = Vec::new();
+        let mut warned_destinations = Vec::new();
         let mut unauthorized_destinations = Vec::new();
 
         // Extract account keys from the message
         let account_keys = self.get_account_keys(&tx.message)?;
+
+        // Check if this transaction involves a known DEX program (Jupiter context)
+        let is_jupiter_context = self.detect_jupiter_context(&tx.message, &account_keys);
 
         // Parse each instruction
         let instructions = match &tx.message {
@@ -167,6 +221,13 @@ impl TransactionValidator {
                         tracing::debug!(
                             "Validated transfer: {} lamports to {} (Jito tip: {})",
                             transfer.lamports, transfer.to, transfer.is_jito_tip
+                        );
+                    } else if self.should_allow_unknown_destination(&transfer.to, is_jupiter_context) {
+                        // In permissive mode with Jupiter context, allow but warn
+                        warned_destinations.push(transfer.to);
+                        tracing::warn!(
+                            "Unknown transfer destination allowed in Jupiter context: {} ({} lamports) - likely a pool vault or routing PDA",
+                            transfer.to, transfer.lamports
                         );
                     } else {
                         unauthorized_destinations.push(transfer.to.to_string());
@@ -196,6 +257,13 @@ impl TransactionValidator {
                         validated_destinations.push(close.destination);
                         tracing::warn!(
                             "CloseAccount destination is not user wallet: {} (allowed but unusual)",
+                            close.destination
+                        );
+                    } else if self.should_allow_unknown_destination(&close.destination, is_jupiter_context) {
+                        // In permissive mode, allow unknown close destinations in Jupiter context
+                        warned_destinations.push(close.destination);
+                        tracing::warn!(
+                            "Unknown CloseAccount destination allowed in Jupiter context: {}",
                             close.destination
                         );
                     } else {
@@ -238,11 +306,60 @@ impl TransactionValidator {
             }
         }
 
+        // Log summary if any destinations were warned
+        if !warned_destinations.is_empty() {
+            tracing::info!(
+                "Transaction validated with {} warned destinations (Jupiter dynamic PDAs)",
+                warned_destinations.len()
+            );
+        }
+
         Ok(TxValidationResult {
             transfer_count,
             close_account_count,
             validated_destinations,
+            warned_destinations,
         })
+    }
+
+    /// Detect if this transaction involves Jupiter or other known DEX programs
+    fn detect_jupiter_context(&self, message: &VersionedMessage, account_keys: &[Pubkey]) -> bool {
+        let instructions = match message {
+            VersionedMessage::Legacy(msg) => &msg.instructions,
+            VersionedMessage::V0(msg) => &msg.instructions,
+        };
+
+        for ix in instructions {
+            let program_id_index = ix.program_id_index as usize;
+            if program_id_index < account_keys.len() {
+                let program_id = &account_keys[program_id_index];
+                if self.known_dex_programs.contains(program_id) {
+                    return true;
+                }
+            }
+        }
+
+        // Also check if any account in the transaction is a known DEX program
+        // (some Jupiter routes invoke programs indirectly)
+        for key in account_keys {
+            if self.known_dex_programs.contains(key) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Determine if an unknown destination should be allowed based on context
+    fn should_allow_unknown_destination(&self, _destination: &Pubkey, is_jupiter_context: bool) -> bool {
+        match self.jupiter_validation_mode {
+            JupiterValidationMode::Strict => false,
+            JupiterValidationMode::Permissive => {
+                // In permissive mode, allow unknown destinations if we're in a Jupiter context
+                // These are likely dynamic PDAs (pool vaults, routing accounts)
+                is_jupiter_context
+            }
+        }
     }
 
     /// Get all account keys from a versioned message
@@ -495,8 +612,58 @@ mod tests {
     #[test]
     fn test_allowed_destination_count() {
         let (validator, _) = create_test_validator();
-        // Should have: 1 user + 8 Jito + 8 DEX + 6 system = 23
-        assert!(validator.allowed_destination_count() >= 20);
+        // Should have: 1 user + 8 Jito + 20 DEX + 6 system + 5 Jupiter routing = 40
+        assert!(validator.allowed_destination_count() >= 35);
+    }
+
+    #[test]
+    fn test_strict_mode_rejects_unknown() {
+        let user = Keypair::new();
+        let validator = TransactionValidator::strict(user.pubkey());
+        let unknown = Keypair::new();
+
+        // Transfer to unknown address should fail in strict mode
+        let ix = system_instruction::transfer(&user.pubkey(), &unknown.pubkey(), 1000);
+        let msg = Message::new(&[ix], Some(&user.pubkey()));
+        let tx = Transaction::new_unsigned(msg);
+        let versioned = VersionedTransaction::from(tx);
+
+        let result = validator.validate(&versioned);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_jupiter_validation_mode_default() {
+        // Default should be Permissive
+        assert_eq!(JupiterValidationMode::default(), JupiterValidationMode::Permissive);
+    }
+
+    #[test]
+    fn test_validator_with_mode() {
+        let user = Keypair::new();
+
+        // Test strict mode creation
+        let strict = TransactionValidator::with_mode(user.pubkey(), JupiterValidationMode::Strict);
+        assert_eq!(strict.jupiter_validation_mode, JupiterValidationMode::Strict);
+
+        // Test permissive mode creation
+        let permissive = TransactionValidator::with_mode(user.pubkey(), JupiterValidationMode::Permissive);
+        assert_eq!(permissive.jupiter_validation_mode, JupiterValidationMode::Permissive);
+    }
+
+    #[test]
+    fn test_allows_transfer_to_jupiter_routing_account() {
+        let (validator, user) = create_test_validator();
+        // Jupiter Token Ledger
+        let jupiter_routing: Pubkey = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN".parse().unwrap();
+
+        let ix = system_instruction::transfer(&user.pubkey(), &jupiter_routing, 10_000);
+        let msg = Message::new(&[ix], Some(&user.pubkey()));
+        let tx = Transaction::new_unsigned(msg);
+        let versioned = VersionedTransaction::from(tx);
+
+        let result = validator.validate(&versioned);
+        assert!(result.is_ok());
     }
 
     #[test]

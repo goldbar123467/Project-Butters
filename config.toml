@@ -47,9 +47,9 @@ max_daily_trades = 20
 # Maximum daily loss percentage (circuit breaker)
 max_daily_loss_pct = 3.0
 
-# Time-based stop (exit after 0.75 hours = 45 min if no movement)
+# Time-based stop (exit after 1 hour if no movement)
 # Prevents holding stale positions indefinitely
-time_stop_hours = 0.75
+time_stop_hours = 1
 
 # Trade size in SOL per signal
 # With ~0.7 SOL (~$100) + $87 USDC, using 0.1 SOL per trade (~$14/trade)

@@ -18,5 +18,5 @@ pub use portfolio::{Portfolio, Holding};
 pub use risk::{RiskLimits, RiskCheck, RiskViolation, InstrumentRiskLimits};
 pub use signal::{Signal, SignalType};
 pub use tx_validator::{TransactionValidator, TxValidationError, TxValidationResult};
-pub use balance_guard::{BalanceGuard, BalanceGuardConfig, BalanceGuardError, ExpectedDelta, BalanceSnapshot};
+pub use balance_guard::{BalanceGuard, BalanceGuardConfig, BalanceGuardError, ExpectedDelta, BalanceSnapshot, GuardStatus};
 pub use known_programs::{is_jito_tip_account, jito_tip_pubkeys, JITO_TIP_ACCOUNTS};

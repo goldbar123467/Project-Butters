@@ -5,7 +5,7 @@
 
 mod commands;
 
-pub use commands::{CliApp, Command, RunCmd, StatusCmd, QuoteCmd, SwapCmd, BacktestCmd};
+pub use commands::{CliApp, Command, RunCmd, StatusCmd, QuoteCmd, SwapCmd, BacktestCmd, ResumeCmd};
 
 use anyhow::Result;
 

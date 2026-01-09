@@ -3,7 +3,10 @@
 //! Detects unexpected balance changes by comparing pre/post trade snapshots.
 //! Halts trading if unexplained SOL losses exceed threshold.
 
+use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
@@ -134,13 +137,110 @@ pub struct BalanceGuard {
 }
 
 /// Record of a balance violation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BalanceViolation {
     pub timestamp: u64,
     pub expected: i64,
     pub actual: i64,
     pub diff: i64,
     pub reason: String,
+}
+
+/// Default status file name
+pub const DEFAULT_STATUS_FILE: &str = "guard_status.json";
+
+/// Persistent guard status for CLI resume functionality
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardStatus {
+    /// Whether trading is currently halted
+    pub is_halted: bool,
+    /// Cumulative unexplained losses (lamports)
+    pub cumulative_unexplained: i64,
+    /// Timestamp when status was last updated
+    pub last_updated: u64,
+    /// Reason for the halt (if halted)
+    pub halt_reason: Option<String>,
+    /// Recent violations
+    pub recent_violations: Vec<BalanceViolation>,
+    /// Wallet address being monitored
+    pub wallet: String,
+}
+
+impl GuardStatus {
+    /// Create a new halted status
+    pub fn halted(wallet: &str, reason: &str, cumulative: i64, violations: Vec<BalanceViolation>) -> Self {
+        Self {
+            is_halted: true,
+            cumulative_unexplained: cumulative,
+            last_updated: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            halt_reason: Some(reason.to_string()),
+            recent_violations: violations,
+            wallet: wallet.to_string(),
+        }
+    }
+
+    /// Create a resumed status
+    pub fn resumed(wallet: &str) -> Self {
+        Self {
+            is_halted: false,
+            cumulative_unexplained: 0,
+            last_updated: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            halt_reason: None,
+            recent_violations: vec![],
+            wallet: wallet.to_string(),
+        }
+    }
+
+    /// Load status from file
+    pub fn load(data_dir: &Path) -> Result<Option<Self>, BalanceGuardError> {
+        let path = data_dir.join(DEFAULT_STATUS_FILE);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = fs::read_to_string(&path)
+            .map_err(|e| BalanceGuardError::RpcError(format!("Failed to read status file: {}", e)))?;
+        let status: Self = serde_json::from_str(&content)
+            .map_err(|e| BalanceGuardError::RpcError(format!("Failed to parse status file: {}", e)))?;
+        Ok(Some(status))
+    }
+
+    /// Save status to file
+    pub fn save(&self, data_dir: &Path) -> Result<(), BalanceGuardError> {
+        // Ensure directory exists
+        fs::create_dir_all(data_dir)
+            .map_err(|e| BalanceGuardError::RpcError(format!("Failed to create data directory: {}", e)))?;
+
+        let path = data_dir.join(DEFAULT_STATUS_FILE);
+        let content = serde_json::to_string_pretty(self)
+            .map_err(|e| BalanceGuardError::RpcError(format!("Failed to serialize status: {}", e)))?;
+        fs::write(&path, content)
+            .map_err(|e| BalanceGuardError::RpcError(format!("Failed to write status file: {}", e)))?;
+
+        tracing::info!("Guard status saved to {}", path.display());
+        Ok(())
+    }
+
+    /// Get the status file path
+    pub fn status_file_path(data_dir: &Path) -> PathBuf {
+        data_dir.join(DEFAULT_STATUS_FILE)
+    }
+
+    /// Delete the status file (used after successful resume)
+    pub fn delete(data_dir: &Path) -> Result<(), BalanceGuardError> {
+        let path = data_dir.join(DEFAULT_STATUS_FILE);
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|e| BalanceGuardError::RpcError(format!("Failed to delete status file: {}", e)))?;
+            tracing::info!("Guard status file deleted");
+        }
+        Ok(())
+    }
 }
 
 impl BalanceGuard {
@@ -276,6 +376,14 @@ impl BalanceGuard {
         tracing::warn!("Trading resumed after manual review");
     }
 
+    /// Resume trading and persist the resumed state to disk
+    pub fn resume_and_persist(&mut self, data_dir: &Path) -> Result<(), BalanceGuardError> {
+        self.resume();
+        let status = GuardStatus::resumed(&self.user_wallet.to_string());
+        status.save(data_dir)?;
+        Ok(())
+    }
+
     /// Reset cumulative tracking (e.g., at start of new session)
     pub fn reset_cumulative(&mut self) {
         self.cumulative_unexplained = 0;
@@ -286,6 +394,41 @@ impl BalanceGuard {
     /// Get the monitored wallet
     pub fn user_wallet(&self) -> &Pubkey {
         &self.user_wallet
+    }
+
+    /// Create a status snapshot for persistence
+    pub fn create_status(&self, reason: Option<&str>) -> GuardStatus {
+        GuardStatus {
+            is_halted: self.is_halted,
+            cumulative_unexplained: self.cumulative_unexplained,
+            last_updated: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            halt_reason: reason.map(String::from),
+            recent_violations: self.violations.clone(),
+            wallet: self.user_wallet.to_string(),
+        }
+    }
+
+    /// Save current status to disk
+    pub fn persist_status(&self, data_dir: &Path, reason: Option<&str>) -> Result<(), BalanceGuardError> {
+        let status = self.create_status(reason);
+        status.save(data_dir)
+    }
+
+    /// Check if a resume file exists and apply it
+    pub fn check_and_apply_resume(data_dir: &Path) -> Result<bool, BalanceGuardError> {
+        if let Some(status) = GuardStatus::load(data_dir)? {
+            if !status.is_halted {
+                // A resumed status file exists - the orchestrator should start unhalted
+                tracing::info!("Found resume signal file - trading will start unhalted");
+                // Delete the file after reading to avoid stale state
+                GuardStatus::delete(data_dir)?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
