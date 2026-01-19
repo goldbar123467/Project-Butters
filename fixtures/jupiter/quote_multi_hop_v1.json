@@ -1,0 +1,62 @@
+{
+  "_fixture_metadata": {
+    "description": "Golden response fixture for Jupiter quote API - multi-hop route with split",
+    "api_version": "v6",
+    "endpoint": "GET /quote",
+    "captured_at": "2026-01-06",
+    "immutable": true,
+    "update_requires": "explicit commit with justification for contract change",
+    "schema_notes": "2026-01-06: Removed feeAmount and feeMint from swapInfo objects - no longer returned by live API"
+  },
+  "_request_params": {
+    "inputMint": "So11111111111111111111111111111111111111112",
+    "outputMint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    "amount": "5000000000",
+    "slippageBps": "100"
+  },
+  "inputMint": "So11111111111111111111111111111111111111112",
+  "inAmount": "5000000000",
+  "outputMint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+  "outAmount": "89234567890123",
+  "otherAmountThreshold": "88342222221222",
+  "swapMode": "ExactIn",
+  "slippageBps": 100,
+  "priceImpactPct": "0.0523",
+  "routePlan": [
+    {
+      "swapInfo": {
+        "ammKey": "7XawhbbxtsRcQA8KTkHT9f9nc6d69UwqCDh6U5EEbEmX",
+        "label": "Raydium",
+        "inputMint": "So11111111111111111111111111111111111111112",
+        "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "inAmount": "2500000000",
+        "outAmount": "345678901"
+      },
+      "percent": 50
+    },
+    {
+      "swapInfo": {
+        "ammKey": "9vqYJjDUFecLL2xPUC4Rc7hyCtZ6iJ4mDiVZX7aFXoAe",
+        "label": "Orca Whirlpool",
+        "inputMint": "So11111111111111111111111111111111111111112",
+        "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "inAmount": "2500000000",
+        "outAmount": "345123456"
+      },
+      "percent": 50
+    },
+    {
+      "swapInfo": {
+        "ammKey": "HWHvQhFmJB3NUcu1aihKmrKegfVxBEHzwVX6yZCKEsi1",
+        "label": "Meteora DLMM",
+        "inputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "outputMint": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "inAmount": "690802357",
+        "outAmount": "89234567890123"
+      },
+      "percent": 100
+    }
+  ],
+  "contextSlot": 391620145,
+  "timeTaken": 0.015678234
+}

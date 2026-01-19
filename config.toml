@@ -1,0 +1,135 @@
+# Butters Sniper - Extreme Z-Score Mean Reversion Bot
+# Only trades on 3+ consecutive extreme deviations (z >= 3.5)
+
+[strategy]
+# Lookback period for rolling mean/std calculation (in candles)
+# 60 candles = ~3 hours on 3m timeframe - smoother signals
+lookback_period = 60
+
+# SNIPER MODE: z_threshold = 3.5 (extreme deviations only)
+# 3.5 std devs = ~0.05% tail probability = ultra-rare signals
+# Only the most extreme price dislocations trigger entry
+z_threshold = 3.5
+
+# Exit at deadband near mean (0.5) for sniper trades
+# Slightly wider than regular bot for bigger moves
+z_exit_threshold = 0.5
+
+# SNIPER MODE: Require 3 consecutive bars above threshold
+# Confirms sustained extreme deviation, not just a spike
+consecutive_bars_required = 3
+
+# Minimum volume percentile to trade (filter low-liquidity moments)
+# 75 = only trade in top 25% volume periods
+min_volume_percentile = 75
+
+# Maximum spread in basis points (0.2% = 20 bps) - tighter spreads only
+max_spread_bps = 20
+
+# SNIPER MODE: No cooldown - extreme signals are rare enough
+# When z >= 3.5 for 3 bars, we want to act immediately
+cooldown_seconds = 0
+
+# Timeframe for candles ("1m", "3m", "4h", "1d")
+timeframe = "3m"
+
+[risk]
+# Maximum position size as percentage of portfolio
+max_position_pct = 5.0
+
+# Stop loss percentage (0.5% = tight for mean reversion)
+stop_loss_pct = 0.5
+
+# Take profit percentage (0.8% = realistic for SOL volatility)
+# With 0.3% fees: net win +0.5%, net loss -0.8%
+# Break-even win rate: 61.5% | Expected win rate ~70% at z=1.8
+# NOTE: Requires candle aggregation fix to achieve 2.25hr lookback
+take_profit_pct = 0.8
+
+# Maximum trades per day (conservative: 1-2/hour = ~12-24/day max)
+max_daily_trades = 12
+
+# Maximum daily loss percentage (circuit breaker)
+max_daily_loss_pct = 3.0
+
+# Time-based stop (exit after 1 hour if no movement)
+# Prevents holding stale positions indefinitely
+time_stop_hours = 1
+
+# Trade size in SOL per signal
+# With ~0.7 SOL (~$100) + $87 USDC, using 0.1 SOL per trade (~$14/trade)
+trade_size_sol = 0.1
+
+[tokens]
+# SOL mint address
+base_mint = "So11111111111111111111111111111111111111112"
+
+# USDC mint address
+quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+# Trading pair symbol (for logging)
+pair_symbol = "SOL/USDC"
+
+[jupiter]
+# Jupiter V1 Swap API (requires API key for higher rate limits)
+# Get API key from: https://portal.jup.ag
+api_url = "https://api.jup.ag/swap/v1"
+
+# API key for higher rate limits (get from https://portal.jup.ag)
+# Set via JUPITER_API_KEY environment variable in .env file
+api_key = ""
+
+# Slippage tolerance in basis points (0.5% = 50 bps)
+slippage_bps = 50
+
+# Restrict intermediate tokens to high-liquidity paths
+restrict_intermediate_tokens = true
+
+# Priority fee mode: "auto", "medium", "high", "veryHigh"
+priority_level = "auto"
+
+# Maximum priority fee in lamports (0.00015 SOL cap = ~$0.02)
+max_priority_fee_lamports = 150000
+
+# Use dynamic compute unit limits
+dynamic_compute_units = true
+
+[solana]
+# RPC endpoint - Set via SOLANA_RPC_URL environment variable in .env file
+# Helius provides dedicated RPC with higher rate limits
+rpc_url = "https://api.mainnet-beta.solana.com"
+
+# Commitment level: "processed", "confirmed", "finalized"
+commitment = "confirmed"
+
+# Wallet keypair path (NEVER commit this file!)
+keypair_path = "/opt/solana/wallets/trading/id.json"
+
+[logging]
+# Log level: "trace", "debug", "info", "warn", "error"
+level = "info"
+
+# Log to file (in addition to stdout)
+log_to_file = true
+
+# Log file path - separate from main bot
+log_file = "logs/sniper.log"
+
+[alerts]
+# Enable Discord webhook notifications
+discord_enabled = false
+discord_webhook_url = ""
+
+# Enable Telegram notifications
+telegram_enabled = false
+telegram_bot_token = ""
+telegram_chat_id = ""
+
+[jito]
+# Enable Jito bundles for MEV protection
+enabled = true
+# Block engine region: "ny", "amsterdam", "frankfurt", "tokyo"
+region = "ny"
+# Tip amount in lamports (10000 = 0.00001 SOL)
+tip_lamports = 10000
+# api_token = "optional-token"

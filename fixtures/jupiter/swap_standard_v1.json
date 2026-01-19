@@ -1,0 +1,33 @@
+{
+  "_fixture_metadata": {
+    "description": "Golden response fixture for Jupiter swap API - transaction building",
+    "api_version": "v6",
+    "endpoint": "POST /swap",
+    "captured_at": "2026-01-06",
+    "immutable": true,
+    "update_requires": "explicit commit with justification for contract change"
+  },
+  "_request_params": {
+    "userPublicKey": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+    "quoteResponse": "see quote_sol_usdc_v1.json",
+    "prioritizationFeeLamports": 5000,
+    "dynamicComputeUnitLimit": true
+  },
+  "swapTransaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAQAHDZKGVhVPfdL2V3rLjk1lnNvBu5j8KuS3T0zzGp6hWzBD5K0RVg9h1z3xPBGPQwqfNnHk4MoZEFIKhODnCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADBkZv5SEXMvsrbpyw5vnvIzlu8X3EmssQ5s6QAAAAAan1RcYe9FmNdrUBFX9wsDBJMaPIVZ1pdu6y18IAAAABt324ddloZPZyFGzut5rBy0he1fWzeROoz1hX7AKkG3fbh86PfIxWoxfGGPz5Z3TS7PMFV3RZwSx1j2m4JAZGbUhFzL7K26csOb57yM5bvF9xJrLEObOkAAAAABBt324ddloZPZyFGzut5rBy0he1fWzeROoz1hX7AKkG3fbh86PfIxWoxfGPz5Z3TS7PMFV3RZwSx1j2m4JAbd9uHXZaGT2cvhRs7reawctIXtX1s3kTqM9YV+wCpCxfj3gXGz7y1B0HWxJ2L8HJqO9y6gGtPXWFLp8J6gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwZGbUhFzL7K26csOb57yM5bvF9xJrLEObOkAAAAAAABpuIV6rgYT7aH9jRhjANdrEOdwa6ztVmKDwAAAAAAEG3fbh86PfIxWoxfGPz5Z3TS7PMFV3RZwSx1j2m4JAMGRmUhFzL7K26csOb57yM5bvF9xJrLEObOkAAAAAwZGbUhFzL7K26csOb57yM5bvF9xJrLEObOkAAAADAGRmUhFzL7K26csOb57yM5bvF9xJrLEObOkAAAAALhDl0B1LPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+  "lastValidBlockHeight": 391620234,
+  "prioritizationFeeLamports": 5000,
+  "computeUnitLimit": 200000,
+  "prioritizationType": {
+    "computeBudget": {
+      "microLamports": 25000,
+      "estimatedMicroLamports": 22500
+    }
+  },
+  "dynamicSlippageReport": {
+    "slippageBps": 50,
+    "otherAmount": 137392,
+    "simulatedIncurredSlippageBps": 12,
+    "amplificationRatio": "1.0"
+  },
+  "simulationError": null
+}

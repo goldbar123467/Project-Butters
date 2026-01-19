@@ -1,0 +1,50 @@
+# Rust build artifacts
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Secrets - NEVER commit these!
+.env
+.env.*
+secrets.toml
+*.pem
+*.key
+
+# Wallet files - NEVER commit!
+id.json
+*.json.bak
+*-keypair.json
+**/wallets/**
+*.keypair
+wallet.json
+wallet*.json
+trading-wallet.json
+/opt/solana/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+*.profraw
+
+# Runtime data
+data/
+guard_status.json
+
+# Claude Flow metrics (runtime)
+.claude-flow/metrics/
+
+# Personal/drafts
+linkedin-post.md
+drafts/
+*.draft.md
