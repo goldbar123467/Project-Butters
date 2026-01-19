@@ -89,7 +89,7 @@ impl TradingOrchestrator {
             slippage_bps,
             is_running: Arc::new(RwLock::new(false)),
             paper_mode,
-            poll_interval: Duration::from_secs(10), // 10 second default poll
+            poll_interval: Duration::from_secs(15), // 15 second poll to avoid API rate limits
             trade_size_sol,
             priority_fee_lamports,
             balance_guard: Arc::new(RwLock::new(BalanceGuard::new(wallet.pubkey()))),
@@ -352,17 +352,26 @@ impl TradingOrchestrator {
         // Calculate expected delta based on swap direction
         const SOL_MINT: &str = "So11111111111111111111111111111111111111112";
 
+        // Extract DEX fees from route plan for more accurate expected delta
+        // Note: fee_amount may not always be returned by Jupiter API
+        let dex_fees = quote.total_dex_fees();
+        if dex_fees > 0 {
+            tracing::debug!("DEX fees from route: {} lamports", dex_fees);
+        }
+
         let expected_delta = if output_mint == SOL_MINT {
             // Token → SOL: We RECEIVE SOL (positive delta)
+            // DEX fees reduce the amount we receive
             ExpectedDelta::token_to_sol(
-                out_amount,
+                out_amount.saturating_sub(dex_fees),
                 swap_response.prioritization_fee_lamports,
                 0  // jito tip handled separately if enabled
             )
         } else if input_mint == SOL_MINT {
             // SOL → Token: We SPEND SOL (negative delta)
+            // DEX fees increase the amount we spend
             ExpectedDelta::sol_to_token(
-                in_amount,
+                in_amount.saturating_add(dex_fees),
                 swap_response.prioritization_fee_lamports,
                 0
             )
