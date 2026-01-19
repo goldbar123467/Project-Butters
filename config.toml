@@ -67,8 +67,9 @@ quote_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 pair_symbol = "SOL/USDC"
 
 [jupiter]
-# Jupiter V6 API base URL
-api_url = "https://public.jupiterapi.com"
+# Jupiter V1 Swap API (requires API key for higher rate limits)
+# Get API key from: https://portal.jup.ag
+api_url = "https://api.jup.ag/swap/v1"
 
 # API key for higher rate limits (get from https://portal.jup.ag)
 # Set via JUPITER_API_KEY environment variable in .env file
