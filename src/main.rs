@@ -167,9 +167,17 @@ async fn run_command(cmd: RunCmd) -> Result<()> {
         preflight_checks(&config, &keypair_path).await?;
     }
 
-    // Build components
-    let jupiter = JupiterClient::new()
-        .context("Failed to create Jupiter client")?;
+    // Build components - use API key from config/env for higher rate limits
+    let jupiter = match config.jupiter.get_api_key() {
+        Some(api_key) => {
+            tracing::info!("Using Jupiter API key for higher rate limits");
+            JupiterClient::with_api_key(api_key)
+        }
+        None => {
+            tracing::warn!("No Jupiter API key configured - may hit rate limits");
+            JupiterClient::new()
+        }
+    }.context("Failed to create Jupiter client")?;
     let solana = SolanaClient::new(config.solana.rpc_url.clone());
 
     // Load wallet with improved error handling
@@ -318,7 +326,10 @@ fn load_wallet_with_context(keypair_path: &str, is_paper_mode: bool) -> Result<W
 
 async fn quote_command(cmd: QuoteCmd) -> Result<()> {
     let config = load_config(&cmd.config)?;
-    let jupiter = JupiterClient::new()?;
+    let jupiter = match config.jupiter.get_api_key() {
+        Some(api_key) => JupiterClient::with_api_key(api_key)?,
+        None => JupiterClient::new()?,
+    };
 
     // Resolve tokens
     let (input_mint, output_mint) = match (cmd.input_token.as_str(), cmd.output_token.as_str()) {
@@ -348,9 +359,11 @@ async fn swap_command(cmd: SwapCmd) -> Result<()> {
     let config = load_config(&cmd.config)
         .context("Failed to load configuration")?;
 
-    // Create Jupiter client
-    let jupiter = JupiterClient::new()
-        .context("Failed to create Jupiter client")?;
+    // Create Jupiter client with API key for higher rate limits
+    let jupiter = match config.jupiter.get_api_key() {
+        Some(api_key) => JupiterClient::with_api_key(api_key),
+        None => JupiterClient::new(),
+    }.context("Failed to create Jupiter client")?;
 
     // Load wallet
     let keypair_path = shellexpand::tilde(&config.solana.keypair_path).to_string();
