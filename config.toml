@@ -3,27 +3,28 @@
 
 [strategy]
 # Lookback period for rolling mean/std calculation (in candles)
-# 45 candles = ~2.25 hours on 3m timeframe - balanced responsiveness
-lookback_period = 45
+# 60 candles = ~3 hours on 3m timeframe - smoother signals, fewer false positives
+lookback_period = 60
 
 # Z-score threshold for entry (1.8 = aggressive, 2.0 = moderate, 2.5 = conservative)
-# 1.8 = ~7.2% tail probability = 2-3 trades/hour with filters
-# Expected win rate 60-65% vs 53.3% break-even = profitable
-z_threshold = 1.8
+# 2.5 = ~1.2% tail probability = high-conviction signals only
+# Higher threshold = fewer but better quality trades
+z_threshold = 2.5
 
-# Exit at deadband near mean (0.2) for better fill rates
+# Exit at deadband near mean (0.3) for better fill rates
 # Lower than entry threshold to capture mean reversion profits
-z_exit_threshold = 0.2
+z_exit_threshold = 0.3
 
 # Minimum volume percentile to trade (filter low-liquidity moments)
-min_volume_percentile = 60
+# 75 = only trade in top 25% volume periods
+min_volume_percentile = 75
 
-# Maximum spread in basis points (0.3% = 30 bps)
-max_spread_bps = 30
+# Maximum spread in basis points (0.2% = 20 bps) - tighter spreads only
+max_spread_bps = 20
 
-# Cooldown between trades in seconds (120s = 2 min)
-# Allows 1-2 trades/hour target rate
-cooldown_seconds = 120
+# Cooldown between trades in seconds (1800s = 30 min)
+# Hard constraint: max 2 trades/hour regardless of signals
+cooldown_seconds = 1800
 
 # Timeframe for candles ("1m", "3m", "4h", "1d")
 timeframe = "3m"
@@ -41,8 +42,8 @@ stop_loss_pct = 0.5
 # NOTE: Requires candle aggregation fix to achieve 2.25hr lookback
 take_profit_pct = 0.8
 
-# Maximum trades per day
-max_daily_trades = 20
+# Maximum trades per day (conservative: 1-2/hour = ~12-24/day max)
+max_daily_trades = 12
 
 # Maximum daily loss percentage (circuit breaker)
 max_daily_loss_pct = 3.0
@@ -79,11 +80,11 @@ slippage_bps = 50
 # Restrict intermediate tokens to high-liquidity paths
 restrict_intermediate_tokens = true
 
-# Priority fee mode: "auto", "high", "veryHigh"
-priority_level = "high"
+# Priority fee mode: "auto", "medium", "high", "veryHigh"
+priority_level = "auto"
 
-# Maximum priority fee in lamports (0.005 SOL cap)
-max_priority_fee_lamports = 5000000
+# Maximum priority fee in lamports (0.00015 SOL cap = ~$0.02)
+max_priority_fee_lamports = 150000
 
 # Use dynamic compute unit limits
 dynamic_compute_units = true
