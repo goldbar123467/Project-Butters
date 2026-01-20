@@ -15,7 +15,6 @@ use crate::ports::execution::{
 
 use super::client::JitoBundleClient;
 use super::error::JitoError;
-use super::types::BundleStatus;
 
 /// Jito-wrapped execution adapter for MEV-protected swaps
 ///
@@ -300,6 +299,7 @@ impl From<JitoError> for ExecutionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::types::BundleStatus;
     use std::str::FromStr;
 
     fn test_payer() -> Pubkey {

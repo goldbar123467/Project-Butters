@@ -113,6 +113,19 @@ impl QuoteResponse {
     pub fn is_price_impact_acceptable(&self, max_impact_pct: f64) -> bool {
         self.price_impact() < max_impact_pct
     }
+
+    /// Sum all DEX fees from the swap route plan.
+    ///
+    /// Note: `fee_amount` is not always returned by Jupiter API, so this may
+    /// return 0 even when fees were charged. When available, this helps provide
+    /// more accurate expected delta calculations for balance validation.
+    pub fn total_dex_fees(&self) -> u64 {
+        self.route_plan
+            .iter()
+            .filter_map(|route| route.swap_info.fee_amount.as_ref())
+            .filter_map(|fee| fee.parse::<u64>().ok())
+            .sum()
+    }
 }
 
 /// A step in the route plan
@@ -235,5 +248,127 @@ mod tests {
         let step: RoutePlanStep = serde_json::from_str(json).unwrap();
         assert_eq!(step.percent, 50);
         assert_eq!(step.swap_info.label, "Orca");
+    }
+
+    #[test]
+    fn test_total_dex_fees_with_fees() {
+        // Test with fees present in route plan
+        let json = r#"{
+            "inputMint": "SOL",
+            "outputMint": "USDC",
+            "inAmount": "1000000000",
+            "outAmount": "150000000",
+            "otherAmountThreshold": "149250000",
+            "swapMode": "ExactIn",
+            "slippageBps": 50,
+            "priceImpactPct": "0.1",
+            "routePlan": [{
+                "swapInfo": {
+                    "ammKey": "pool1",
+                    "label": "Raydium",
+                    "inputMint": "SOL",
+                    "outputMint": "USDC",
+                    "inAmount": "500000000",
+                    "outAmount": "75000000",
+                    "feeAmount": "1500",
+                    "feeMint": "USDC"
+                },
+                "percent": 50
+            }, {
+                "swapInfo": {
+                    "ammKey": "pool2",
+                    "label": "Orca",
+                    "inputMint": "SOL",
+                    "outputMint": "USDC",
+                    "inAmount": "500000000",
+                    "outAmount": "75000000",
+                    "feeAmount": "2000",
+                    "feeMint": "USDC"
+                },
+                "percent": 50
+            }]
+        }"#;
+
+        let quote: QuoteResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(quote.total_dex_fees(), 3500); // 1500 + 2000
+    }
+
+    #[test]
+    fn test_total_dex_fees_without_fees() {
+        // Test when fee_amount is not returned by Jupiter API
+        let json = r#"{
+            "inputMint": "SOL",
+            "outputMint": "USDC",
+            "inAmount": "1000000000",
+            "outAmount": "150000000",
+            "otherAmountThreshold": "149250000",
+            "swapMode": "ExactIn",
+            "slippageBps": 50,
+            "priceImpactPct": "0.1",
+            "routePlan": [{
+                "swapInfo": {
+                    "ammKey": "pool1",
+                    "label": "Raydium",
+                    "inputMint": "SOL",
+                    "outputMint": "USDC",
+                    "inAmount": "1000000000",
+                    "outAmount": "150000000"
+                },
+                "percent": 100
+            }]
+        }"#;
+
+        let quote: QuoteResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(quote.total_dex_fees(), 0); // No fees returned
+    }
+
+    #[test]
+    fn test_total_dex_fees_with_invalid_value() {
+        // Test with invalid fee string (should be ignored)
+        let json = r#"{
+            "inputMint": "SOL",
+            "outputMint": "USDC",
+            "inAmount": "1000000000",
+            "outAmount": "150000000",
+            "otherAmountThreshold": "149250000",
+            "swapMode": "ExactIn",
+            "slippageBps": 50,
+            "priceImpactPct": "0.1",
+            "routePlan": [{
+                "swapInfo": {
+                    "ammKey": "pool1",
+                    "label": "Raydium",
+                    "inputMint": "SOL",
+                    "outputMint": "USDC",
+                    "inAmount": "1000000000",
+                    "outAmount": "150000000",
+                    "feeAmount": "invalid",
+                    "feeMint": "USDC"
+                },
+                "percent": 100
+            }]
+        }"#;
+
+        let quote: QuoteResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(quote.total_dex_fees(), 0); // Invalid fee ignored
+    }
+
+    #[test]
+    fn test_total_dex_fees_empty_route() {
+        // Test with empty route plan
+        let json = r#"{
+            "inputMint": "SOL",
+            "outputMint": "USDC",
+            "inAmount": "1000000000",
+            "outAmount": "150000000",
+            "otherAmountThreshold": "149250000",
+            "swapMode": "ExactIn",
+            "slippageBps": 50,
+            "priceImpactPct": "0.1",
+            "routePlan": []
+        }"#;
+
+        let quote: QuoteResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(quote.total_dex_fees(), 0);
     }
 }

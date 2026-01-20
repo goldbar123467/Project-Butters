@@ -6,6 +6,8 @@ use clap::{Parser, Subcommand};
 use anyhow::Result;
 use std::path::PathBuf;
 
+use crate::meme::commands::MemeCmd;
+
 /// Butters - Mean Reversion DEX Trading Bot for Solana/Jupiter
 #[derive(Parser, Debug)]
 #[command(
@@ -50,6 +52,10 @@ pub enum Command {
 
     /// Resume trading after BalanceGuard halt
     Resume(ResumeCmd),
+
+    /// Meme coin trading commands
+    #[command(subcommand)]
+    Meme(MemeCmd),
 }
 
 /// Start trading loop
@@ -232,6 +238,7 @@ pub async fn execute(app: CliApp) -> Result<()> {
         Command::Swap(cmd) => swap_command(cmd).await,
         Command::Backtest(cmd) => backtest_command(cmd).await,
         Command::Resume(cmd) => resume_command(cmd).await,
+        Command::Meme(cmd) => crate::meme::execute_meme_command(cmd).await,
     }
 }
 

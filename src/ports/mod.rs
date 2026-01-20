@@ -12,7 +12,3 @@ pub mod strategy;
 pub mod models;
 
 // Re-export main traits and types
-pub use market_data::{MarketDataPort, MarketDataError, Ohlcv, MarketDataEvent};
-pub use execution::{ExecutionPort, ExecutionError, SwapQuoteRequest, SwapQuoteResponse};
-pub use strategy::{StrategyPort, StrategyError, Signal, StrategyParams};
-pub use models::{PortError, PortResult, Instrument, PriceUpdate, Order, OrderType, OrderStatus};

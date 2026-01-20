@@ -6,6 +6,7 @@
 mod commands;
 
 pub use commands::{CliApp, Command, RunCmd, StatusCmd, QuoteCmd, SwapCmd, BacktestCmd, ResumeCmd};
+pub use crate::meme::commands::MemeCmd;
 
 use anyhow::Result;
 

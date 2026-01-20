@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! Butters - Jupiter Mean Reversion DEX Trading Bot
 //!
 //! A conservative mean reversion trading strategy for Solana via Jupiter aggregator.
@@ -8,6 +9,7 @@ mod strategy;
 mod adapters;
 mod config;
 mod application;
+mod meme;
 
 use anyhow::{Result, Context, bail};
 use clap::Parser;
@@ -17,14 +19,14 @@ use std::path::Path;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-use crate::adapters::cli::{CliApp, Command, RunCmd, StatusCmd, QuoteCmd, SwapCmd, BacktestCmd, ResumeCmd};
+use crate::adapters::cli::{CliApp, Command, RunCmd, StatusCmd, QuoteCmd, SwapCmd, BacktestCmd, ResumeCmd, MemeCmd};
 use crate::adapters::jito::{JitoBundleClient, JitoConfig, JitoExecutionAdapter};
 use crate::adapters::jupiter::JupiterClient;
 use crate::adapters::solana::{SolanaClient, WalletManager};
 use crate::application::TradingOrchestrator;
 use crate::config::load_config;
 use crate::strategy::StrategyConfig;
-use crate::ports::execution::{ExecutionPort, SwapQuoteRequest, ExecuteSwapRequest, SwapQuoteResponse};
+use crate::ports::execution::{ExecutionPort, SwapQuoteRequest, ExecuteSwapRequest};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -41,6 +43,7 @@ async fn main() -> Result<()> {
         Command::Swap(cmd) => swap_command(cmd).await,
         Command::Backtest(cmd) => backtest_command(cmd).await,
         Command::Resume(cmd) => resume_command(cmd).await,
+        Command::Meme(cmd) => meme_command(cmd).await,
     }
 }
 
@@ -167,9 +170,17 @@ async fn run_command(cmd: RunCmd) -> Result<()> {
         preflight_checks(&config, &keypair_path).await?;
     }
 
-    // Build components
-    let jupiter = JupiterClient::new()
-        .context("Failed to create Jupiter client")?;
+    // Build components - use API key from config/env for higher rate limits
+    let jupiter = match config.jupiter.get_api_key() {
+        Some(api_key) => {
+            tracing::info!("Using Jupiter API key for higher rate limits");
+            JupiterClient::with_api_key(api_key)
+        }
+        None => {
+            tracing::warn!("No Jupiter API key configured - may hit rate limits");
+            JupiterClient::new()
+        }
+    }.context("Failed to create Jupiter client")?;
     let solana = SolanaClient::new(config.solana.rpc_url.clone());
 
     // Load wallet with improved error handling
@@ -318,7 +329,10 @@ fn load_wallet_with_context(keypair_path: &str, is_paper_mode: bool) -> Result<W
 
 async fn quote_command(cmd: QuoteCmd) -> Result<()> {
     let config = load_config(&cmd.config)?;
-    let jupiter = JupiterClient::new()?;
+    let jupiter = match config.jupiter.get_api_key() {
+        Some(api_key) => JupiterClient::with_api_key(api_key)?,
+        None => JupiterClient::new()?,
+    };
 
     // Resolve tokens
     let (input_mint, output_mint) = match (cmd.input_token.as_str(), cmd.output_token.as_str()) {
@@ -348,9 +362,11 @@ async fn swap_command(cmd: SwapCmd) -> Result<()> {
     let config = load_config(&cmd.config)
         .context("Failed to load configuration")?;
 
-    // Create Jupiter client
-    let jupiter = JupiterClient::new()
-        .context("Failed to create Jupiter client")?;
+    // Create Jupiter client with API key for higher rate limits
+    let jupiter = match config.jupiter.get_api_key() {
+        Some(api_key) => JupiterClient::with_api_key(api_key),
+        None => JupiterClient::new(),
+    }.context("Failed to create Jupiter client")?;
 
     // Load wallet
     let keypair_path = shellexpand::tilde(&config.solana.keypair_path).to_string();
@@ -472,6 +488,11 @@ async fn swap_command(cmd: SwapCmd) -> Result<()> {
 async fn backtest_command(_cmd: BacktestCmd) -> Result<()> {
     println!("Backtest command not yet implemented");
     Ok(())
+}
+
+async fn meme_command(cmd: MemeCmd) -> Result<()> {
+    // Delegate to the meme module's execute function
+    crate::meme::execute_meme_command(cmd).await
 }
 
 async fn resume_command(cmd: ResumeCmd) -> Result<()> {
