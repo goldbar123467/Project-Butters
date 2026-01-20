@@ -10,7 +10,10 @@ use thiserror::Error;
 use base64::Engine;
 use solana_sdk::transaction::VersionedTransaction;
 
-use crate::strategy::{MeanReversionStrategy, StrategyConfig, TradeAction, PositionState};
+use crate::strategy::{
+    MeanReversionStrategy, StrategyConfig, TradeAction, PositionState,
+    AdxRegimeDetector, AdxConfig, CandleBuilder, RegimeDetector,
+};
 use crate::adapters::jupiter::{JupiterClient, QuoteRequest, SwapRequest};
 use crate::adapters::solana::{SolanaClient, WalletManager};
 use crate::domain::{
@@ -50,7 +53,17 @@ pub struct TradingOrchestrator {
     priority_fee_lamports: u64,
     balance_guard: Arc<RwLock<BalanceGuard>>,
     tx_validator: TransactionValidator,
+    /// ADX regime detector for filtering trending markets
+    adx_detector: Arc<RwLock<AdxRegimeDetector>>,
+    /// Candle builder to create OHLC from price ticks
+    candle_builder: Arc<RwLock<CandleBuilder>>,
+    /// Position multiplier from ADX regime detection (0.0-1.0)
+    /// During warmup this defaults to WARMUP_MULTIPLIER for cautious trading
+    regime_multiplier: Arc<RwLock<f64>>,
 }
+
+/// Position multiplier during ADX warmup (trade cautiously until ADX is ready)
+const WARMUP_MULTIPLIER: f64 = 0.5;
 
 /// Status snapshot of the orchestrator
 #[derive(Debug, Clone)]
@@ -61,6 +74,14 @@ pub struct OrchestratorStatus {
     pub daily_pnl_pct: f64,
     pub last_price: Option<f64>,
     pub current_zscore: Option<f64>,
+    /// Current ADX value (0-100), None if warming up
+    pub adx_value: Option<f64>,
+    /// Current trend regime from ADX
+    pub trend_regime: String,
+    /// Position size multiplier from regime detection (0.0-1.0)
+    pub regime_multiplier: f64,
+    /// Whether ADX has enough data
+    pub adx_ready: bool,
 }
 
 impl TradingOrchestrator {
@@ -79,6 +100,12 @@ impl TradingOrchestrator {
     ) -> Result<Self, OrchestratorError> {
         let strategy = MeanReversionStrategy::new(strategy_config);
 
+        // Initialize ADX with crypto-optimized settings (period=10, faster response)
+        let adx_detector = AdxRegimeDetector::new(AdxConfig::crypto_optimized());
+
+        // Build 1-minute candles from price ticks for ADX
+        let candle_builder = CandleBuilder::one_minute();
+
         Ok(Self {
             strategy: Arc::new(RwLock::new(strategy)),
             jupiter,
@@ -94,7 +121,22 @@ impl TradingOrchestrator {
             priority_fee_lamports,
             balance_guard: Arc::new(RwLock::new(BalanceGuard::new(wallet.pubkey()))),
             tx_validator: TransactionValidator::new(wallet.pubkey()),
+            adx_detector: Arc::new(RwLock::new(adx_detector)),
+            candle_builder: Arc::new(RwLock::new(candle_builder)),
+            regime_multiplier: Arc::new(RwLock::new(WARMUP_MULTIPLIER)), // Start with cautious trading
         })
+    }
+
+    /// Create with custom ADX configuration
+    pub fn with_adx_config(mut self, config: AdxConfig) -> Self {
+        self.adx_detector = Arc::new(RwLock::new(AdxRegimeDetector::new(config)));
+        self
+    }
+
+    /// Create with custom candle period for ADX
+    pub fn with_candle_period(mut self, period: Duration) -> Self {
+        self.candle_builder = Arc::new(RwLock::new(CandleBuilder::new(period)));
+        self
     }
 
     /// Set custom poll interval
@@ -130,16 +172,51 @@ impl TradingOrchestrator {
         // 1. Fetch current price (use Jupiter quote for now)
         let price = self.fetch_price().await?;
 
-        // 2. Get action from strategy (does NOT update state yet)
+        // 2. Update candle builder and ADX regime detection
+        let (adx_value, adx_ready, regime) = self.update_regime_detection(price).await;
+
+        // 3. Get current regime multiplier (graceful degradation during warmup)
+        let multiplier = *self.regime_multiplier.read().await;
+
+        // 4. Get action from strategy (does NOT update state yet)
         let action = {
             let mut strategy = self.strategy.write().await;
             strategy.update(price)
         };
 
-        // 3. Execute if action needed
+        // 5. Get z-score for logging
+        let z_score = {
+            let strategy = self.strategy.read().await;
+            strategy.current_zscore().map(|z| z.z_score).unwrap_or(0.0)
+        };
+
+        // 6. Execute if action needed, respecting regime filter
         if let Some(action) = action {
             match action {
-                TradeAction::EnterLong | TradeAction::EnterShort | TradeAction::Exit => {
+                TradeAction::EnterLong | TradeAction::EnterShort => {
+                    // For entries, check if regime allows trading
+                    if multiplier <= 0.0 {
+                        tracing::info!(
+                            "SOL ${:.2} | Z: {:.2} | ADX: {:.1} ({}) | BLOCKED by regime (multiplier=0)",
+                            price, z_score,
+                            adx_value.unwrap_or(0.0),
+                            regime
+                        );
+                        return Ok(());
+                    }
+
+                    // Log the trade attempt with regime info
+                    let warmup_note = if adx_ready { "" } else { " [ADX warming up]" };
+                    tracing::info!(
+                        "SOL ${:.2} | Z: {:.2} | ADX: {:.1} ({}) | {:?} (size x{:.0}%){}",
+                        price, z_score,
+                        adx_value.unwrap_or(0.0),
+                        regime,
+                        action,
+                        multiplier * 100.0,
+                        warmup_note
+                    );
+
                     // Execute the trade
                     match self.execute_trade(&action, price).await {
                         Ok(()) => {
@@ -149,40 +226,98 @@ impl TradingOrchestrator {
                             tracing::info!("Trade confirmed, strategy state updated");
                         }
                         Err(e) => {
-                            // Trade failed - DO NOT update state, will retry next tick
                             tracing::error!(
                                 "Trade execution failed: {}. Position state unchanged, will retry.",
                                 e
                             );
-                            // For exits, we don't propagate error - we want to keep trying
-                            if matches!(action, TradeAction::Exit) {
-                                tracing::warn!("Exit trade failed - will retry on next tick");
-                            } else {
-                                return Err(e);
-                            }
+                            return Err(e);
+                        }
+                    }
+                }
+                TradeAction::Exit => {
+                    // Always allow exits regardless of regime
+                    tracing::info!(
+                        "SOL ${:.2} | Z: {:.2} | ADX: {:.1} ({}) | EXIT",
+                        price, z_score,
+                        adx_value.unwrap_or(0.0),
+                        regime
+                    );
+
+                    match self.execute_trade(&action, price).await {
+                        Ok(()) => {
+                            let mut strategy = self.strategy.write().await;
+                            strategy.confirm_trade(action, price);
+                            tracing::info!("Exit confirmed, position closed");
+                        }
+                        Err(e) => {
+                            tracing::warn!("Exit trade failed - will retry on next tick: {}", e);
+                            // Don't propagate exit errors - keep trying
                         }
                     }
                 }
                 TradeAction::Hold => {
-                    // Get z-score for display
-                    let strategy = self.strategy.read().await;
-                    let z_score = strategy.current_zscore()
-                        .map(|z| z.z_score)
-                        .unwrap_or(0.0);
+                    let warmup_note = if adx_ready { "" } else { " [ADX warming up]" };
                     tracing::info!(
-                        "SOL ${:.2} | Z-score: {:.2} | Action: HOLD",
-                        price, z_score
+                        "SOL ${:.2} | Z: {:.2} | ADX: {:.1} ({}) | HOLD{}",
+                        price, z_score,
+                        adx_value.unwrap_or(0.0),
+                        regime,
+                        warmup_note
                     );
                 }
             }
         } else {
+            // Strategy still warming up (z-score not ready)
+            let warmup_note = if adx_ready { "" } else { " [ADX warming up]" };
             tracing::info!(
-                "SOL ${:.2} | Warming up...",
-                price
+                "SOL ${:.2} | Strategy warming up... | ADX: {:.1}{}",
+                price,
+                adx_value.unwrap_or(0.0),
+                warmup_note
             );
         }
 
         Ok(())
+    }
+
+    /// Update regime detection with new price, returns (adx_value, adx_ready, regime_name)
+    async fn update_regime_detection(&self, price: f64) -> (Option<f64>, bool, String) {
+        // Feed price to candle builder
+        let maybe_candle = {
+            let mut builder = self.candle_builder.write().await;
+            builder.update(price)
+        };
+
+        // If a candle completed, feed it to ADX
+        if let Some(candle) = maybe_candle {
+            let mut adx = self.adx_detector.write().await;
+            adx.update(&candle);
+
+            // Update regime multiplier based on ADX
+            let new_multiplier = if adx.is_ready() {
+                adx.get_position_multiplier()
+            } else {
+                // Graceful degradation: trade cautiously during warmup
+                WARMUP_MULTIPLIER
+            };
+
+            *self.regime_multiplier.write().await = new_multiplier;
+
+            tracing::debug!(
+                "Candle closed: O={:.2} H={:.2} L={:.2} C={:.2} | ADX={:.1} | Multiplier={:.0}%",
+                candle.open, candle.high, candle.low, candle.close,
+                adx.adx(),
+                new_multiplier * 100.0
+            );
+        }
+
+        // Get current ADX state for logging
+        let adx = self.adx_detector.read().await;
+        let adx_ready = adx.is_ready();
+        let adx_value = if adx_ready { Some(adx.adx()) } else { None };
+        let regime = format!("{:?}", adx.get_regime());
+
+        (adx_value, adx_ready, regime)
     }
 
     /// Fetch current market price using Jupiter quote
@@ -595,6 +730,15 @@ impl TradingOrchestrator {
 
         let current_zscore = strategy.current_zscore().map(|z| z.z_score);
 
+        // Get ADX status
+        let adx = self.adx_detector.read().await;
+        let adx_ready = adx.is_ready();
+        let adx_value = if adx_ready { Some(adx.adx()) } else { None };
+        let trend_regime = format!("{:?}", adx.get_regime());
+        drop(adx); // Release lock before reading multiplier
+
+        let regime_multiplier = *self.regime_multiplier.read().await;
+
         OrchestratorStatus {
             is_running,
             position,
@@ -602,6 +746,10 @@ impl TradingOrchestrator {
             daily_pnl_pct: strategy.daily_pnl_pct(),
             last_price: None, // Could cache this from last tick
             current_zscore,
+            adx_value,
+            trend_regime,
+            regime_multiplier,
+            adx_ready,
         }
     }
 
@@ -637,6 +785,9 @@ impl Clone for TradingOrchestrator {
             priority_fee_lamports: self.priority_fee_lamports,
             balance_guard: Arc::clone(&self.balance_guard),
             tx_validator: self.tx_validator.clone(),
+            adx_detector: Arc::clone(&self.adx_detector),
+            candle_builder: Arc::clone(&self.candle_builder),
+            regime_multiplier: Arc::clone(&self.regime_multiplier),
         }
     }
 }

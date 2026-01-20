@@ -5,6 +5,5 @@
 pub mod loader;
 
 pub use loader::{
-    AlertsSection, Config, ConfigError, JupiterSection, LoggingSection, RiskSection, SolanaSection,
-    StrategySection, TokensSection, load_config,
+    Config, load_config,
 };

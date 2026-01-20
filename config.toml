@@ -11,9 +11,9 @@ lookback_period = 60
 # Higher threshold = fewer but better quality trades
 z_threshold = 3.0
 
-# Exit at deadband near mean (0.3) for better fill rates
+# Exit at deadband near mean (0.37) - academically optimized threshold
 # Lower than entry threshold to capture mean reversion profits
-z_exit_threshold = 0.3
+z_exit_threshold = 0.37
 
 # Minimum volume percentile to trade (filter low-liquidity moments)
 # 75 = only trade in top 25% volume periods
@@ -53,8 +53,8 @@ max_daily_loss_pct = 3.0
 time_stop_hours = 1
 
 # Trade size in SOL per signal
-# With ~0.7 SOL (~$100) + $87 USDC, using 0.1 SOL per trade (~$14/trade)
-trade_size_sol = 0.1
+# ~$50 per trade at current SOL prices
+trade_size_sol = 0.37
 
 [tokens]
 # SOL mint address

@@ -56,6 +56,26 @@ pub const KNOWN_DEX_PROGRAMS: &[&str] = &[
     "FLUXubRmkEi2q6K3Y9kBPg9248ggaZVsoSFhtJHSrm1X",
 ];
 
+/// Pump.fun program IDs for meme coin bonding curves
+pub const PUMP_FUN_PROGRAMS: &[&str] = &[
+    // Pump.fun bonding curve program (main program)
+    "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+    // Pump.fun fee account
+    "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM",
+    // Pump.fun global state
+    "4wTV1YmiEkRvAtNtsSGPtUrqRYQMe5SKy2uB4Jjaxnjf",
+    // Pump.fun event authority
+    "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1",
+];
+
+/// PumpSwap (Pump.fun AMM after graduation) program IDs
+pub const PUMP_SWAP_PROGRAMS: &[&str] = &[
+    // PumpSwap AMM program (for graduated tokens)
+    "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA",
+    // PumpSwap factory
+    "BSfD6SHZigAfDWSjzD5Q41jw8LmKwtmjskPH9XW1mrRW",
+];
+
 /// System programs that are always allowed
 pub const SYSTEM_PROGRAMS: &[&str] = &[
     // System Program
@@ -146,6 +166,46 @@ pub fn is_jupiter_routing_account(pubkey: &Pubkey) -> bool {
     JUPITER_ROUTING_ACCOUNTS.contains(&pubkey_str.as_str())
 }
 
+/// Parse all Pump.fun program IDs into Pubkeys
+pub fn pump_fun_pubkeys() -> Vec<Pubkey> {
+    PUMP_FUN_PROGRAMS
+        .iter()
+        .filter_map(|s| Pubkey::from_str(s).ok())
+        .collect()
+}
+
+/// Parse all PumpSwap program IDs into Pubkeys
+pub fn pump_swap_pubkeys() -> Vec<Pubkey> {
+    PUMP_SWAP_PROGRAMS
+        .iter()
+        .filter_map(|s| Pubkey::from_str(s).ok())
+        .collect()
+}
+
+/// Check if a pubkey is a known Pump.fun program
+pub fn is_pump_fun_program(pubkey: &Pubkey) -> bool {
+    let pubkey_str = pubkey.to_string();
+    PUMP_FUN_PROGRAMS.contains(&pubkey_str.as_str())
+}
+
+/// Check if a pubkey is a known PumpSwap program
+pub fn is_pump_swap_program(pubkey: &Pubkey) -> bool {
+    let pubkey_str = pubkey.to_string();
+    PUMP_SWAP_PROGRAMS.contains(&pubkey_str.as_str())
+}
+
+/// Check if a pubkey is a known meme trading program (Pump.fun or PumpSwap)
+pub fn is_meme_program(pubkey: &Pubkey) -> bool {
+    is_pump_fun_program(pubkey) || is_pump_swap_program(pubkey)
+}
+
+/// Get all meme trading program pubkeys
+pub fn meme_program_pubkeys() -> Vec<Pubkey> {
+    let mut pubkeys = pump_fun_pubkeys();
+    pubkeys.extend(pump_swap_pubkeys());
+    pubkeys
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +265,56 @@ mod tests {
 
         let not_routing = Pubkey::from_str("11111111111111111111111111111111").unwrap();
         assert!(!is_jupiter_routing_account(&not_routing));
+    }
+
+    #[test]
+    fn test_pump_fun_pubkeys_parse() {
+        let pubkeys = pump_fun_pubkeys();
+        assert_eq!(pubkeys.len(), 4);
+    }
+
+    #[test]
+    fn test_pump_swap_pubkeys_parse() {
+        let pubkeys = pump_swap_pubkeys();
+        assert_eq!(pubkeys.len(), 2);
+    }
+
+    #[test]
+    fn test_is_pump_fun_program() {
+        let pump_fun = Pubkey::from_str("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P").unwrap();
+        assert!(is_pump_fun_program(&pump_fun));
+
+        let not_pump_fun = Pubkey::from_str("11111111111111111111111111111111").unwrap();
+        assert!(!is_pump_fun_program(&not_pump_fun));
+    }
+
+    #[test]
+    fn test_is_pump_swap_program() {
+        let pump_swap = Pubkey::from_str("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA").unwrap();
+        assert!(is_pump_swap_program(&pump_swap));
+
+        let not_pump_swap = Pubkey::from_str("11111111111111111111111111111111").unwrap();
+        assert!(!is_pump_swap_program(&not_pump_swap));
+    }
+
+    #[test]
+    fn test_is_meme_program() {
+        // Pump.fun should be recognized
+        let pump_fun = Pubkey::from_str("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P").unwrap();
+        assert!(is_meme_program(&pump_fun));
+
+        // PumpSwap should be recognized
+        let pump_swap = Pubkey::from_str("pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA").unwrap();
+        assert!(is_meme_program(&pump_swap));
+
+        // System program should NOT be recognized as meme
+        let system = Pubkey::from_str("11111111111111111111111111111111").unwrap();
+        assert!(!is_meme_program(&system));
+    }
+
+    #[test]
+    fn test_meme_program_pubkeys() {
+        let pubkeys = meme_program_pubkeys();
+        assert_eq!(pubkeys.len(), 6); // 4 pump.fun + 2 pumpswap
     }
 }

@@ -37,7 +37,8 @@ fi
 
 echo "[+] Wallet: $WALLET_PATH"
 echo "[+] Config: config.toml"
-echo "[+] Trade size: 0.1 SOL per signal"
+TRADE_SIZE=$(grep 'trade_size_sol' config.toml | head -1 | awk -F'=' '{print $2}' | tr -d ' ')
+echo "[+] Trade size: $TRADE_SIZE SOL per signal (~\$50)"
 echo "[+] Jito MEV protection: ENABLED"
 echo ""
 echo "════════════════════════════════════════════════════════════════════"

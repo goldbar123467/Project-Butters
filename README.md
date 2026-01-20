@@ -1,14 +1,14 @@
 # 🧈 Butters
 
 [![Build](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square)]()
-[![Tests](https://img.shields.io/badge/tests-179%20passing-brightgreen?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-1070%20passing-brightgreen?style=flat-square)]()
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange?style=flat-square)](https://www.rust-lang.org/)
 [![Solana](https://img.shields.io/badge/solana-mainnet-blueviolet?style=flat-square)](https://solana.com/)
 [![Jupiter](https://img.shields.io/badge/jupiter-v6-blue?style=flat-square)](https://jup.ag/)
 [![Jito](https://img.shields.io/badge/jito-MEV%20protected-purple?style=flat-square)](https://www.jito.wtf/)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-**Conservative mean reversion trading bot for Solana via Jupiter DEX aggregator with Jito MEV protection.**
+**Conservative mean reversion trading bot for Solana via Jupiter DEX aggregator with Jito MEV protection and ADX regime filtering.**
 
 ---
 
@@ -16,14 +16,15 @@
 
 | Feature | Description |
 |---------|-------------|
-| :chart_with_upwards_trend: **Z-Score Statistical Gating** | Only trades when price deviates significantly from rolling mean (configurable threshold). Targets extreme moves with 65-75% reversion probability. |
-| :hexagon: **Hexagonal Architecture** | Clean separation of domain logic, ports, and adapters. Enables easy testing, mocking, and swapping of external integrations without rewriting core strategy. |
+| :chart_with_upwards_trend: **Z-Score Statistical Gating** | Only trades when price deviates significantly from rolling mean (z-score ±3.0 entry, ±0.37 exit). Targets extreme moves with 65-75% reversion probability. |
+| :bar_chart: **ADX Regime Detection** | Filters out trending markets using Wilder's ADX indicator. Mean reversion works best in ranging markets (ADX < 25). Automatically scales position size based on trend strength. |
+| :hexagon: **Hexagonal Architecture** | Clean separation of domain logic, ports, and adapters. 92 Rust files, 1070+ tests. Enables easy testing, mocking, and swapping of external integrations. |
 | :page_facing_up: **Paper Trading Mode** | Simulate trades without risking real funds. Perfect for strategy tuning and validation before going live. Virtual portfolio tracks what would have happened. |
 | :rocket: **Jupiter V6 Integration** | Access to 20+ Solana DEXs through Jupiter's smart routing aggregator. Automatically finds best prices with minimal slippage across Raydium, Orca, Serum, and more. |
-| :shield: **Jito MEV Protection** | Submit trades as atomic bundles via Jito Block Engine to prevent frontrunning, sandwich attacks, and other MEV extraction. Your trades execute safely or not at all. |
-| :moneybag: **Risk Management** | Position sizing limits, max drawdown protection, automatic stop-loss triggers, and daily loss circuit breakers. Conservative defaults protect capital. |
-| :mag: **Preflight Safety Checks** | Validates balances, token accounts, slippage limits, and market conditions before submitting transactions. Fails fast to avoid costly mistakes. |
-| :satellite: **Real-time Price Monitoring** | Continuous OHLCV data collection and z-score calculation. Detects mean reversion opportunities as they happen with configurable lookback windows. |
+| :shield: **Jito MEV Protection** | Submit trades as atomic bundles via Jito Block Engine to prevent frontrunning, sandwich attacks, and other MEV extraction. Fail-closed policy: trades execute safely or not at all. |
+| :lock: **BalanceGuard Security** | Pre/post trade balance validation detects unexpected losses. Transaction validator whitelists only known programs (Jupiter, Jito tips). Halts trading on anomalies. |
+| :moneybag: **Risk Management** | Position sizing limits, max drawdown protection, automatic stop-loss triggers, time-based exits, and daily loss circuit breakers. Conservative defaults protect capital. |
+| :satellite: **Real-time Price Monitoring** | Continuous price feeds with 1-minute OHLC candle aggregation for ADX. Z-score calculation over configurable lookback windows. |
 
 ---
 
@@ -78,10 +79,11 @@ Most trading bots are written in Python. Butters isn't. Here's why that matters 
 |--------|-------------|
 | Trade Execution | ~3 seconds (signal to on-chain confirmation) |
 | Quote Latency | <20ms from Jupiter API |
-| Z-Score Calculation | Sub-millisecond (50-candle rolling window) |
+| Z-Score Calculation | Sub-millisecond (60-candle rolling window) |
+| ADX Calculation | Sub-millisecond (10-period Wilder's smoothing) |
 | Binary Size | ~10MB single executable |
 | Memory Footprint | <50MB runtime |
-| Test Suite | 179 tests in <5 seconds |
+| Test Suite | 1070+ tests in <10 seconds |
 
 ### Deployment Simplicity
 
@@ -438,22 +440,38 @@ All configuration is done through a TOML file. By default, the bot looks for `co
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `lookback_period` | integer | 50 | Number of candles for rolling mean/std calculation |
-| `z_threshold` | float | 2.5 | Z-score threshold for entry signals (2.0 = moderate, 2.5 = conservative) |
-| `z_exit_threshold` | float | 0.0 | Z-score target for exit (0.0 = mean reversion) |
-| `min_volume_percentile` | integer | 60 | Minimum volume percentile filter (0-100) |
-| `max_spread_bps` | integer | 30 | Maximum bid-ask spread in basis points |
-| `cooldown_seconds` | integer | 300 | Minimum seconds between trades |
+| `lookback_period` | integer | 60 | Number of candles for rolling mean/std calculation |
+| `z_threshold` | float | 3.0 | Z-score threshold for entry signals (2.5 = moderate, 3.0 = strict) |
+| `z_exit_threshold` | float | 0.37 | Z-score target for exit (academically optimized at 0.37) |
+| `min_volume_percentile` | integer | 75 | Minimum volume percentile filter (0-100) |
+| `max_spread_bps` | integer | 20 | Maximum bid-ask spread in basis points |
+| `cooldown_seconds` | integer | 0 | Minimum seconds between trades |
+
+### ADX Regime Detection
+
+The bot uses Wilder's ADX (Average Directional Index) to filter trending markets:
+
+| ADX Range | Regime | Position Multiplier |
+|-----------|--------|---------------------|
+| 0-15 | Ranging | 100% |
+| 15-20 | Weak Trend | 80% |
+| 20-25 | Transitioning | 50% |
+| 25-30 | Trending | 20% |
+| 30+ | Strong Trend | 0% (blocked) |
+
+**Warmup**: ADX requires ~19 one-minute candles to become valid. During warmup, the bot trades at 50% size.
 
 ### [risk]
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `max_position_pct` | float | 5.0 | Maximum position size as % of portfolio |
-| `stop_loss_pct` | float | 2.0 | Stop loss trigger percentage |
-| `take_profit_pct` | float | 1.5 | Take profit target percentage |
-| `max_daily_trades` | integer | 10 | Maximum trades per day |
+| `stop_loss_pct` | float | 0.5 | Stop loss trigger percentage |
+| `take_profit_pct` | float | 0.8 | Take profit target percentage |
+| `max_daily_trades` | integer | 20 | Maximum trades per day |
 | `max_daily_loss_pct` | float | 3.0 | Daily loss circuit breaker (%) |
+| `time_stop_hours` | float | 1.0 | Exit position after N hours if no movement |
+| `trade_size_sol` | float | 0.37 | Trade size in SOL per signal (~$50) |
 
 ### [tokens]
 
@@ -565,7 +583,8 @@ Butters uses **hexagonal architecture** (ports and adapters) for clean separatio
                          │  ORCHESTRATOR   │
                          │  (application)  │
                          │  - Trading loop │
-                         │  - Coordination │
+                         │  - ADX regime   │
+                         │  - BalanceGuard │
                          └────────┬────────┘
                                   │
         ┌─────────────────────────┼─────────────────────────┐
@@ -574,8 +593,10 @@ Butters uses **hexagonal architecture** (ports and adapters) for clean separatio
 │  DOMAIN CORE  │       │   STRATEGY PORT   │     │    MARKET PORT    │
 │  - Position   │       │   - ZScoreGate    │     │    - PriceFeed    │
 │  - Trade      │       │   - MeanReversion │     │    - OHLCV        │
-│  - Portfolio  │       └─────────┬─────────┘     └─────────┬─────────┘
-│  - RiskLimits │                 │                         │
+│  - Portfolio  │       │   - ADX Regime    │     │    - CandleBuilder│
+│  - RiskLimits │       │   - OU Process    │     └─────────┬─────────┘
+│  - BalanceGuard       └─────────┬─────────┘               │
+│  - TxValidator│                 │                         │
 └───────────────┘       ┌─────────▼─────────┐     ┌─────────▼─────────┐
                         │ STRATEGY ADAPTER  │     │  JUPITER ADAPTER  │
                         │  (mean reversion) │     │   (DEX routing)   │
@@ -598,11 +619,11 @@ Butters uses **hexagonal architecture** (ports and adapters) for clean separatio
 
 | Layer | Purpose |
 |-------|---------|
-| **Domain Core** | Pure business logic with zero external dependencies |
+| **Domain Core** | Pure business logic: Position, Trade, Portfolio, BalanceGuard, TxValidator |
 | **Ports** | Trait definitions (interfaces) for external systems |
-| **Adapters** | Concrete implementations connecting to external APIs |
-| **Application** | Orchestrator that wires all components together |
-| **Strategy** | Signal generation logic using domain types |
+| **Adapters** | Jupiter DEX, Jito bundles, Solana RPC, PumpFun WebSocket |
+| **Application** | TradingOrchestrator (SOL/USDC), MemeOrchestrator (multi-token) |
+| **Strategy** | Z-Score gating, Mean Reversion, ADX regime detection, OU process |
 
 ### Benefits
 
@@ -678,7 +699,7 @@ The `--i-accept-losses` flag ensures you consciously accept the risk before trad
 
 MIT License
 
-Copyright (c) 2024 Butters Contributors
+Copyright (c) 2024-2026 Butters Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

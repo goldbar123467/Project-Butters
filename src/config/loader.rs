@@ -3,8 +3,11 @@
 //! Loads and validates configuration from TOML files matching config.toml structure.
 
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use thiserror::Error;
+
+// Re-export MemeConfig from meme module for TOML parsing
+pub use crate::meme::{MemeConfig, MemeConfigError};
 
 /// Main configuration structure matching config.toml
 #[derive(Debug, Clone, Deserialize)]
@@ -19,6 +22,9 @@ pub struct Config {
     pub alerts: AlertsSection,
     #[serde(default)]
     pub jito: JitoSection,
+    /// Meme coin trading configuration (optional)
+    #[serde(default)]
+    pub meme: Option<MemeConfig>,
 }
 
 /// Strategy configuration section
@@ -283,7 +289,23 @@ impl Config {
             ));
         }
 
+        // Validate meme config if present
+        if let Some(ref meme) = self.meme {
+            meme.validate()
+                .map_err(|e| ConfigError::ValidationError(e.to_string()))?;
+        }
+
         Ok(())
+    }
+
+    /// Get meme config or default
+    pub fn meme_config(&self) -> MemeConfig {
+        self.meme.clone().unwrap_or_default()
+    }
+
+    /// Check if meme trading is enabled
+    pub fn is_meme_enabled(&self) -> bool {
+        self.meme.as_ref().map(|m| m.enabled).unwrap_or(false)
     }
 }
 

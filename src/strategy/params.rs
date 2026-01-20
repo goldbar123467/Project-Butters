@@ -12,7 +12,7 @@ pub struct StrategyConfig {
     pub lookback_period: usize,
     /// Z-score threshold for entry signals (e.g., 2.5 = 2.5 std devs)
     pub z_threshold: f64,
-    /// Z-score threshold for exit signals (e.g., 0.2 = deadband near mean)
+    /// Z-score threshold for exit signals (0.37 = academically optimized)
     /// When z-score crosses this threshold toward mean, exit position
     pub z_exit_threshold: f64,
     /// Minimum seconds between trades
@@ -28,7 +28,7 @@ impl Default for StrategyConfig {
         Self {
             lookback_period: 50,
             z_threshold: 2.5,
-            z_exit_threshold: 0.2, // deadband near mean
+            z_exit_threshold: 0.37, // academically optimized threshold
             cooldown_seconds: 300, // 5 minutes
             risk: RiskConfig::default(),
             filters: FilterConfig::default(),
@@ -182,7 +182,7 @@ mod tests {
         let config = StrategyConfig::default();
         assert_eq!(config.lookback_period, 50);
         assert_eq!(config.z_threshold, 2.5);
-        assert_eq!(config.z_exit_threshold, 0.2);
+        assert_eq!(config.z_exit_threshold, 0.37);
         assert_eq!(config.cooldown_seconds, 300);
         assert!(config.validate().is_ok());
     }

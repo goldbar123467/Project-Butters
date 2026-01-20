@@ -6,7 +6,7 @@
 use std::time::Duration;
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::ports::execution::{
     ExecutionPort, ExecutionError, SwapQuoteRequest, SwapQuoteResponse,

@@ -86,7 +86,7 @@ pub struct WebSocketMarketData {
 
 #[async_trait]
 impl MarketDataPort for WebSocketMarketData {
-    async fn subscribe(&self, params: SubscriptionParams) 
+    async fn subscribe(&self, _params: SubscriptionParams) 
         -> Result<mpsc::Receiver<MarketDataEvent>, MarketDataError> {
         // Implementation would connect to WebSocket and return receiver
         todo!()
@@ -120,7 +120,7 @@ impl MarketDataPort for RestMarketData {
         Err(MarketDataError::Unsupported("REST implementation cannot stream real-time data".into()))
     }
     
-    async fn fetch_historical(&self, query: HistoricalQuery) 
+    async fn fetch_historical(&self, _query: HistoricalQuery) 
         -> Result<Vec<Ohlcv>, MarketDataError> {
         // Implementation would fetch from REST API
         todo!()
