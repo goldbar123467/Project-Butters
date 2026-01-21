@@ -121,7 +121,7 @@ impl MeanReversionStrategy {
                 // Check exit conditions for long
                 let pnl_pct = (current_price - entry_price) / entry_price * 100.0;
 
-                // Check time-based exit first
+                // Check time-based exit first (max hold)
                 if let Some(entry_time) = self.entry_time {
                     let hours_elapsed = entry_time.elapsed().as_secs_f64() / 3600.0;
                     if hours_elapsed >= self.config.risk.time_stop_hours {
@@ -129,21 +129,36 @@ impl MeanReversionStrategy {
                     }
                 }
 
-                if pnl_pct >= self.config.risk.take_profit_pct {
-                    TradeAction::Exit // Take profit
-                } else if pnl_pct <= -self.config.risk.stop_loss_pct {
-                    TradeAction::Exit // Stop loss
-                } else if zscore.is_overbought(self.config.z_exit_threshold) {
-                    TradeAction::Exit // Mean reversion exit (z-score crossed above exit threshold)
+                // Stop loss always triggers regardless of min hold
+                if pnl_pct <= -self.config.risk.stop_loss_pct {
+                    return TradeAction::Exit; // Stop loss
+                }
+
+                // Check if minimum hold time has passed for profit-taking exits
+                let min_hold_passed = if let Some(entry_time) = self.entry_time {
+                    let minutes_elapsed = entry_time.elapsed().as_secs() / 60;
+                    minutes_elapsed >= self.config.risk.min_hold_minutes
                 } else {
-                    TradeAction::Hold
+                    true // No entry time tracked, allow exit
+                };
+
+                if min_hold_passed {
+                    if pnl_pct >= self.config.risk.take_profit_pct {
+                        TradeAction::Exit // Take profit
+                    } else if zscore.is_overbought(self.config.z_exit_threshold) {
+                        TradeAction::Exit // Mean reversion exit (z-score crossed above exit threshold)
+                    } else {
+                        TradeAction::Hold
+                    }
+                } else {
+                    TradeAction::Hold // Still in min hold period
                 }
             }
             PositionState::Short { entry_price } => {
                 // Check exit conditions for short
                 let pnl_pct = (entry_price - current_price) / entry_price * 100.0;
 
-                // Check time-based exit first
+                // Check time-based exit first (max hold)
                 if let Some(entry_time) = self.entry_time {
                     let hours_elapsed = entry_time.elapsed().as_secs_f64() / 3600.0;
                     if hours_elapsed >= self.config.risk.time_stop_hours {
@@ -151,14 +166,29 @@ impl MeanReversionStrategy {
                     }
                 }
 
-                if pnl_pct >= self.config.risk.take_profit_pct {
-                    TradeAction::Exit // Take profit
-                } else if pnl_pct <= -self.config.risk.stop_loss_pct {
-                    TradeAction::Exit // Stop loss
-                } else if zscore.is_oversold(self.config.z_exit_threshold) {
-                    TradeAction::Exit // Mean reversion exit (z-score crossed below exit threshold)
+                // Stop loss always triggers regardless of min hold
+                if pnl_pct <= -self.config.risk.stop_loss_pct {
+                    return TradeAction::Exit; // Stop loss
+                }
+
+                // Check if minimum hold time has passed for profit-taking exits
+                let min_hold_passed = if let Some(entry_time) = self.entry_time {
+                    let minutes_elapsed = entry_time.elapsed().as_secs() / 60;
+                    minutes_elapsed >= self.config.risk.min_hold_minutes
                 } else {
-                    TradeAction::Hold
+                    true // No entry time tracked, allow exit
+                };
+
+                if min_hold_passed {
+                    if pnl_pct >= self.config.risk.take_profit_pct {
+                        TradeAction::Exit // Take profit
+                    } else if zscore.is_oversold(self.config.z_exit_threshold) {
+                        TradeAction::Exit // Mean reversion exit (z-score crossed below exit threshold)
+                    } else {
+                        TradeAction::Hold
+                    }
+                } else {
+                    TradeAction::Hold // Still in min hold period
                 }
             }
         }

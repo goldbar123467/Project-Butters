@@ -64,10 +64,17 @@ pub struct RiskSection {
     /// Trade size in SOL per signal (e.g., 0.1 = trade 0.1 SOL)
     #[serde(default = "default_trade_size_sol")]
     pub trade_size_sol: f64,
+    /// Minimum hold time in minutes before allowing profit-taking exits
+    #[serde(default = "default_min_hold_minutes")]
+    pub min_hold_minutes: u64,
 }
 
 fn default_trade_size_sol() -> f64 {
     0.1 // Default to 0.1 SOL per trade
+}
+
+fn default_min_hold_minutes() -> u64 {
+    0 // Default: no minimum hold (backwards compatible)
 }
 
 /// Tokens configuration section
@@ -341,6 +348,7 @@ impl From<&Config> for crate::strategy::params::StrategyConfig {
                 max_daily_trades: config.risk.max_daily_trades,
                 max_daily_loss_pct: config.risk.max_daily_loss_pct,
                 time_stop_hours: config.risk.time_stop_hours as f64,
+                min_hold_minutes: config.risk.min_hold_minutes,
             },
             filters: FilterConfig {
                 min_volume_percentile: config.strategy.min_volume_percentile,

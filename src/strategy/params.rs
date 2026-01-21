@@ -87,6 +87,14 @@ pub struct RiskConfig {
     pub max_daily_loss_pct: f64,
     /// Time-based stop in hours (exit after N hours if no movement)
     pub time_stop_hours: f64,
+    /// Minimum hold time in minutes before allowing profit-taking exits
+    /// Stop loss can still trigger during this period
+    #[serde(default = "default_min_hold_minutes")]
+    pub min_hold_minutes: u64,
+}
+
+fn default_min_hold_minutes() -> u64 {
+    0 // Default: no minimum hold (backwards compatible)
 }
 
 impl Default for RiskConfig {
@@ -98,6 +106,7 @@ impl Default for RiskConfig {
             max_daily_trades: 10,
             max_daily_loss_pct: 3.0,
             time_stop_hours: 24.0,
+            min_hold_minutes: 0,
         }
     }
 }

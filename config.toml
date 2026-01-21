@@ -6,25 +6,25 @@
 # 60 candles = ~3 hours on 3m timeframe - smoother signals, fewer false positives
 lookback_period = 60
 
-# Z-score threshold for entry (2.0 = moderate, 2.5 = conservative, 3.0 = strict)
-# 3.0 = ~0.3% tail probability = high conviction signals only
+# Z-score threshold for entry (2.0 = moderate, 2.5 = conservative, 4.5 = strict)
+# 4.5 = extreme deviations only = 1-2 trades/day target
 # Higher threshold = fewer but better quality trades
-z_threshold = 3.0
+z_threshold = 4.5
 
-# Exit at deadband near mean (0.37) - academically optimized threshold
+# Exit at deadband near mean (0.5) - allow fuller reversion
 # Lower than entry threshold to capture mean reversion profits
-z_exit_threshold = 0.37
+z_exit_threshold = 0.5
 
 # Minimum volume percentile to trade (filter low-liquidity moments)
-# 75 = only trade in top 25% volume periods
-min_volume_percentile = 75
+# 80 = only trade in top 20% volume periods
+min_volume_percentile = 80
 
 # Maximum spread in basis points (0.2% = 20 bps) - tighter spreads only
 max_spread_bps = 20
 
-# Cooldown between trades in seconds (0 = no cooldown)
-# No artificial delay - trade on every valid signal
-cooldown_seconds = 0
+# Cooldown between trades in seconds (3600 = 1 hour)
+# Prevents overtrading after a position closes
+cooldown_seconds = 3600
 
 # Timeframe for candles ("1m", "3m", "4h", "1d")
 timeframe = "3m"
@@ -33,28 +33,31 @@ timeframe = "3m"
 # Maximum position size as percentage of portfolio
 max_position_pct = 5.0
 
-# Stop loss percentage (0.5% = tight for mean reversion)
-stop_loss_pct = 0.5
+# Stop loss percentage (2.5% = wide, emergency only)
+# Research shows mean reversion works better with wider stops
+stop_loss_pct = 2.5
 
-# Take profit percentage (0.8% = realistic for SOL volatility)
-# With 0.3% fees: net win +0.5%, net loss -0.8%
-# Break-even win rate: 61.5% | Expected win rate ~70% at z=1.8
-# NOTE: Requires candle aggregation fix to achieve 2.25hr lookback
-take_profit_pct = 0.8
+# Take profit percentage (2.0% = bigger target to overcome fees)
+# With $0.30 round-trip costs on $75 position: need 2% to net ~$1.20
+take_profit_pct = 2.0
 
-# Maximum trades per day/session
-max_daily_trades = 20
+# Maximum trades per day/session (strict limit for 1-2/day strategy)
+max_daily_trades = 3
 
 # Maximum daily loss percentage (circuit breaker)
-max_daily_loss_pct = 3.0
+max_daily_loss_pct = 5.0
 
-# Time-based stop (exit after 1 hour if no movement)
+# Time-based stop (exit after 2 hours if no movement)
 # Prevents holding stale positions indefinitely
-time_stop_hours = 1
+time_stop_hours = 2
+
+# Minimum hold time in minutes before allowing profit-taking exits
+# Forces patience - stop loss can still trigger during this period
+min_hold_minutes = 30
 
 # Trade size in SOL per signal
-# ~$50 per trade at current SOL prices
-trade_size_sol = 0.37
+# ~$63 per trade at current SOL prices - sized for 0.649 SOL balance
+trade_size_sol = 0.50
 
 [tokens]
 # SOL mint address
