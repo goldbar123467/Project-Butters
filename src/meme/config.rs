@@ -72,6 +72,56 @@ pub struct MemeConfig {
     pub max_position_hours: f64,
 
     // =========================================================================
+    // Momentum Strategy Parameters
+    // =========================================================================
+    /// Enable momentum-based trading (if false, uses mean reversion)
+    #[serde(default)]
+    pub momentum_enabled: bool,
+
+    /// Z-score threshold for momentum entry (positive = with trend direction)
+    /// Entry when z > +momentum_z_threshold AND ADX confirms trend
+    #[serde(default = "default_momentum_z_threshold")]
+    pub momentum_z_threshold: f64,
+
+    /// ADX threshold for entry confirmation (ADX > this = trend confirmed)
+    #[serde(default = "default_momentum_adx_entry_threshold")]
+    pub momentum_adx_entry_threshold: f64,
+
+    /// ADX threshold below which trend is considered dying (force exit)
+    #[serde(default = "default_momentum_adx_exit_threshold")]
+    pub momentum_adx_exit_threshold: f64,
+
+    /// Hours after which to check for ADX decay (momentum decay check)
+    #[serde(default = "default_momentum_decay_hours")]
+    pub momentum_decay_hours: f64,
+
+    // =========================================================================
+    // Trailing Take Profit Parameters
+    // =========================================================================
+    /// Enable trailing take profit instead of fixed take profit
+    #[serde(default)]
+    pub use_trailing_tp: bool,
+
+    /// Profit percentage at which trailing stop activates
+    #[serde(default = "default_trailing_activation_pct")]
+    pub trailing_activation_pct: f64,
+
+    /// Percentage drawdown from high watermark that triggers exit
+    #[serde(default = "default_trailing_stop_pct")]
+    pub trailing_stop_pct: f64,
+
+    // =========================================================================
+    // Timing Parameters
+    // =========================================================================
+    /// Cooldown between trades in seconds
+    #[serde(default = "default_cooldown_seconds")]
+    pub cooldown_seconds: u64,
+
+    /// Maximum trades per day
+    #[serde(default = "default_max_daily_trades")]
+    pub max_daily_trades: u32,
+
+    // =========================================================================
     // Trade Execution
     // =========================================================================
     /// Trade size in USDC per position
@@ -144,7 +194,37 @@ fn default_take_profit_pct() -> f64 {
     15.0
 }
 fn default_max_position_hours() -> f64 {
-    4.0
+    6.0 // Extended for momentum strategy
+}
+
+// Momentum Strategy defaults
+fn default_momentum_z_threshold() -> f64 {
+    1.5 // Entry when z > +1.5 (with trend)
+}
+fn default_momentum_adx_entry_threshold() -> f64 {
+    25.0 // ADX > 25 confirms trend
+}
+fn default_momentum_adx_exit_threshold() -> f64 {
+    20.0 // ADX < 20 = trend dying
+}
+fn default_momentum_decay_hours() -> f64 {
+    4.0 // Check for ADX decay after 4h
+}
+
+// Trailing Take Profit defaults
+fn default_trailing_activation_pct() -> f64 {
+    10.0 // Activate trailing after 10% profit
+}
+fn default_trailing_stop_pct() -> f64 {
+    5.0 // Exit on 5% drawdown from high
+}
+
+// Timing defaults
+fn default_cooldown_seconds() -> u64 {
+    300 // 5 minutes for momentum (was 3600 for mean reversion)
+}
+fn default_max_daily_trades() -> u32 {
+    10 // Conservative start
 }
 fn default_trade_size_usdc() -> f64 {
     50.0
@@ -182,6 +262,20 @@ impl Default for MemeConfig {
             stop_loss_pct: default_stop_loss_pct(),
             take_profit_pct: default_take_profit_pct(),
             max_position_hours: default_max_position_hours(),
+            // Momentum strategy
+            momentum_enabled: false,
+            momentum_z_threshold: default_momentum_z_threshold(),
+            momentum_adx_entry_threshold: default_momentum_adx_entry_threshold(),
+            momentum_adx_exit_threshold: default_momentum_adx_exit_threshold(),
+            momentum_decay_hours: default_momentum_decay_hours(),
+            // Trailing take profit
+            use_trailing_tp: false,
+            trailing_activation_pct: default_trailing_activation_pct(),
+            trailing_stop_pct: default_trailing_stop_pct(),
+            // Timing
+            cooldown_seconds: default_cooldown_seconds(),
+            max_daily_trades: default_max_daily_trades(),
+            // Trade execution
             trade_size_usdc: default_trade_size_usdc(),
             slippage_bps: default_slippage_bps(),
             poll_interval_secs: default_poll_interval_secs(),
@@ -229,10 +323,45 @@ impl MemeConfig {
         }
 
         // Entry/Exit thresholds
-        if self.z_entry_threshold >= 0.0 {
+        // For mean reversion: z_entry_threshold must be negative (oversold entry)
+        // For momentum: momentum_z_threshold is positive (with trend entry)
+        if !self.momentum_enabled && self.z_entry_threshold >= 0.0 {
             return Err(MemeConfigError::InvalidValue(
-                "z_entry_threshold must be < 0 (negative for oversold)".to_string(),
+                "z_entry_threshold must be < 0 (negative for oversold) when momentum_enabled=false".to_string(),
             ));
+        }
+
+        // Momentum-specific validation
+        if self.momentum_enabled {
+            if self.momentum_z_threshold <= 0.0 {
+                return Err(MemeConfigError::InvalidValue(
+                    "momentum_z_threshold must be > 0 (positive for with-trend entry)".to_string(),
+                ));
+            }
+            if self.momentum_adx_entry_threshold <= 0.0 || self.momentum_adx_entry_threshold > 100.0 {
+                return Err(MemeConfigError::InvalidValue(
+                    "momentum_adx_entry_threshold must be 0-100".to_string(),
+                ));
+            }
+            if self.momentum_adx_exit_threshold <= 0.0 || self.momentum_adx_exit_threshold >= self.momentum_adx_entry_threshold {
+                return Err(MemeConfigError::InvalidValue(
+                    "momentum_adx_exit_threshold must be > 0 and < momentum_adx_entry_threshold".to_string(),
+                ));
+            }
+        }
+
+        // Trailing take profit validation
+        if self.use_trailing_tp {
+            if self.trailing_activation_pct <= 0.0 || self.trailing_activation_pct > 100.0 {
+                return Err(MemeConfigError::InvalidValue(
+                    "trailing_activation_pct must be 0-100".to_string(),
+                ));
+            }
+            if self.trailing_stop_pct <= 0.0 || self.trailing_stop_pct >= self.trailing_activation_pct {
+                return Err(MemeConfigError::InvalidValue(
+                    "trailing_stop_pct must be > 0 and < trailing_activation_pct".to_string(),
+                ));
+            }
         }
 
         if self.stop_loss_pct <= 0.0 || self.stop_loss_pct > 100.0 {
@@ -335,6 +464,15 @@ mod tests {
         assert_eq!(config.trade_size_usdc, 50.0);
         assert!(config.paper_mode);
         assert!(config.tokens.is_empty());
+        // Momentum defaults
+        assert!(!config.momentum_enabled);
+        assert_eq!(config.momentum_z_threshold, 1.5);
+        assert_eq!(config.momentum_adx_entry_threshold, 25.0);
+        assert_eq!(config.momentum_adx_exit_threshold, 20.0);
+        // Trailing TP defaults
+        assert!(!config.use_trailing_tp);
+        assert_eq!(config.trailing_activation_pct, 10.0);
+        assert_eq!(config.trailing_stop_pct, 5.0);
     }
 
     #[test]
@@ -353,8 +491,48 @@ mod tests {
     #[test]
     fn test_validate_invalid_z_entry_threshold() {
         let mut config = MemeConfig::default();
-        config.z_entry_threshold = 1.0; // Must be negative
+        config.z_entry_threshold = 1.0; // Must be negative when momentum disabled
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_momentum_allows_positive_z() {
+        let mut config = MemeConfig::default();
+        config.momentum_enabled = true;
+        config.z_entry_threshold = 1.0; // Now allowed with momentum
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_momentum_requires_valid_thresholds() {
+        let mut config = MemeConfig::default();
+        config.momentum_enabled = true;
+
+        // Invalid: momentum_z_threshold must be positive
+        config.momentum_z_threshold = -1.0;
+        assert!(config.validate().is_err());
+        config.momentum_z_threshold = 1.5; // Fix it
+
+        // Invalid: adx_exit must be < adx_entry
+        config.momentum_adx_exit_threshold = 30.0;
+        config.momentum_adx_entry_threshold = 25.0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_trailing_tp_thresholds() {
+        let mut config = MemeConfig::default();
+        config.use_trailing_tp = true;
+
+        // Invalid: trailing_stop must be < trailing_activation
+        config.trailing_activation_pct = 5.0;
+        config.trailing_stop_pct = 10.0;
+        assert!(config.validate().is_err());
+
+        // Fix it
+        config.trailing_activation_pct = 10.0;
+        config.trailing_stop_pct = 5.0;
+        assert!(config.validate().is_ok());
     }
 
     #[test]

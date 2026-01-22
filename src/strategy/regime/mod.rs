@@ -1,14 +1,19 @@
 //! Market Regime Detection Module
 //!
 //! Provides trait-based regime detection to identify when market conditions
-//! are favorable for mean reversion strategies. Uses ADX and other indicators
-//! to filter out trending markets where mean reversion typically fails.
+//! are favorable for trading strategies.
+//!
+//! - **ADX Regime Detector**: For mean reversion (low ADX = favorable)
+//! - **Momentum ADX Detector**: For momentum trading (high ADX = favorable)
+//! - **Candle Builder**: Builds OHLC candles from price ticks
 
 pub mod adx;
 mod candle_builder;
+pub mod momentum_adx;
 
 pub use adx::{AdxRegimeDetector, AdxConfig, AdxResult, TrendRegime, TrendDirection};
 pub use candle_builder::CandleBuilder;
+pub use momentum_adx::{MomentumAdxDetector, MomentumAdxConfig, MomentumSignal};
 
 /// OHLC candle data for regime detection
 #[derive(Debug, Clone, Copy)]

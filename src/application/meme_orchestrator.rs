@@ -24,7 +24,13 @@ use tokio::sync::{Mutex, RwLock};
 use crate::adapters::jupiter::{JupiterClient, QuoteRequest, SwapRequest};
 use crate::adapters::solana::{SolanaClient, WalletManager};
 use crate::domain::{BalanceGuard, ExpectedDelta};
+use crate::domain::honeypot_detector::{HoneypotDetector, HoneypotRisk, StubHoneypotDetector};
+use crate::domain::liquidity_guard::{LiquidityGuard, LiquidityGuardConfig, LiquidityTrend};
+use crate::domain::rug_detector::{RugDetector, RugDetectorConfig, RiskLevel, TokenSafetyReport};
 use crate::strategy::ou_process::{OUProcess, OUSignal, OUParams};
+use crate::strategy::regime::{
+    MomentumAdxDetector, MomentumAdxConfig, MomentumSignal, CandleBuilder, Candle,
+};
 
 /// USDC mint address on Solana
 pub const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -135,6 +141,32 @@ pub struct ActivePosition {
     pub entry_z_score: f64,
     /// OU parameters at entry
     pub ou_params: Option<OUParams>,
+    /// High watermark price for trailing TP
+    #[serde(default)]
+    pub high_watermark_price: f64,
+    /// Whether trailing TP has been activated
+    #[serde(default)]
+    pub trailing_activated: bool,
+    /// Trailing activation percentage (from config)
+    #[serde(default = "default_trailing_activation")]
+    pub trailing_activation_pct: f64,
+    /// Trailing stop percentage (from config)
+    #[serde(default = "default_trailing_stop")]
+    pub trailing_stop_pct: f64,
+    /// Entry ADX value (for momentum strategy)
+    #[serde(default)]
+    pub entry_adx: Option<f64>,
+    /// Whether this is a momentum trade (vs mean reversion)
+    #[serde(default)]
+    pub is_momentum_trade: bool,
+}
+
+fn default_trailing_activation() -> f64 {
+    10.0
+}
+
+fn default_trailing_stop() -> f64 {
+    5.0
 }
 
 impl ActivePosition {
@@ -159,6 +191,46 @@ impl ActivePosition {
                 .as_secs(),
             entry_z_score,
             ou_params,
+            high_watermark_price: entry_price,
+            trailing_activated: false,
+            trailing_activation_pct: default_trailing_activation(),
+            trailing_stop_pct: default_trailing_stop(),
+            entry_adx: None,
+            is_momentum_trade: false,
+        }
+    }
+
+    /// Create a new momentum position with ADX and trailing TP config
+    pub fn new_momentum(
+        token_mint: String,
+        token_symbol: String,
+        entry_price: f64,
+        size: u64,
+        entry_value_usdc: f64,
+        entry_z_score: f64,
+        ou_params: Option<OUParams>,
+        entry_adx: f64,
+        trailing_activation_pct: f64,
+        trailing_stop_pct: f64,
+    ) -> Self {
+        Self {
+            token_mint,
+            token_symbol,
+            entry_price,
+            size,
+            entry_value_usdc,
+            entry_timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            entry_z_score,
+            ou_params,
+            high_watermark_price: entry_price,
+            trailing_activated: false,
+            trailing_activation_pct,
+            trailing_stop_pct,
+            entry_adx: Some(entry_adx),
+            is_momentum_trade: true,
         }
     }
 
@@ -177,6 +249,46 @@ impl ActivePosition {
             .unwrap_or_default()
             .as_secs();
         now.saturating_sub(self.entry_timestamp)
+    }
+
+    /// Update high watermark price and check trailing activation
+    /// Returns true if the watermark was updated
+    pub fn update_price(&mut self, current_price: f64) -> bool {
+        let pnl_pct = self.pnl_pct(current_price);
+
+        // Check if trailing TP should activate
+        if !self.trailing_activated && pnl_pct >= self.trailing_activation_pct {
+            self.trailing_activated = true;
+            tracing::info!(
+                "Trailing TP activated for {} at {:.2}% profit",
+                self.token_symbol,
+                pnl_pct
+            );
+        }
+
+        // Update high watermark if price is higher
+        if current_price > self.high_watermark_price {
+            self.high_watermark_price = current_price;
+            return true;
+        }
+
+        false
+    }
+
+    /// Calculate drawdown from high watermark
+    pub fn drawdown_from_high(&self, current_price: f64) -> f64 {
+        if self.high_watermark_price == 0.0 {
+            return 0.0;
+        }
+        (self.high_watermark_price - current_price) / self.high_watermark_price * 100.0
+    }
+
+    /// Check if trailing stop has been triggered
+    pub fn trailing_stop_triggered(&self, current_price: f64) -> bool {
+        if !self.trailing_activated {
+            return false;
+        }
+        self.drawdown_from_high(current_price) >= self.trailing_stop_pct
     }
 }
 
@@ -295,7 +407,56 @@ pub struct MemeOrchestratorConfig {
     pub min_half_life_minutes: f64,
     /// Maximum half-life in minutes
     pub max_half_life_minutes: f64,
+
+    // =========================================================================
+    // Momentum Strategy Parameters
+    // =========================================================================
+    /// Enable momentum-based trading (if false, uses mean reversion)
+    #[serde(default)]
+    pub momentum_enabled: bool,
+    /// Z-score threshold for momentum entry (positive = with trend)
+    #[serde(default = "default_momentum_z")]
+    pub momentum_z_threshold: f64,
+    /// ADX threshold for entry confirmation
+    #[serde(default = "default_adx_entry")]
+    pub momentum_adx_entry_threshold: f64,
+    /// ADX threshold below which trend is dying
+    #[serde(default = "default_adx_exit")]
+    pub momentum_adx_exit_threshold: f64,
+    /// Hours after which to check for ADX decay
+    #[serde(default = "default_decay_hours")]
+    pub momentum_decay_hours: f64,
+
+    // =========================================================================
+    // Trailing Take Profit Parameters
+    // =========================================================================
+    /// Enable trailing take profit
+    #[serde(default)]
+    pub use_trailing_tp: bool,
+    /// Profit percentage at which trailing stop activates
+    #[serde(default = "default_trailing_activation")]
+    pub trailing_activation_pct: f64,
+    /// Percentage drawdown from high watermark that triggers exit
+    #[serde(default = "default_trailing_stop")]
+    pub trailing_stop_pct: f64,
+
+    // =========================================================================
+    // Timing & Risk Parameters
+    // =========================================================================
+    /// Cooldown between trades in seconds
+    #[serde(default = "default_cooldown_seconds")]
+    pub cooldown_seconds: u64,
+    /// Maximum trades per day
+    #[serde(default = "default_max_daily_trades")]
+    pub max_daily_trades: u32,
 }
+
+fn default_momentum_z() -> f64 { 1.5 }
+fn default_adx_entry() -> f64 { 25.0 }
+fn default_adx_exit() -> f64 { 20.0 }
+fn default_decay_hours() -> f64 { 4.0 }
+fn default_cooldown_seconds() -> u64 { 300 } // 5 minutes
+fn default_max_daily_trades() -> u32 { 10 }
 
 fn default_enabled() -> bool {
     false
@@ -309,9 +470,9 @@ impl Default for MemeOrchestratorConfig {
             ou_dt_minutes: 1.0,
             z_entry_threshold: -3.5,
             z_exit_threshold: 0.0,
-            stop_loss_pct: 10.0,
+            stop_loss_pct: 8.0, // Tighter for momentum
             take_profit_pct: 15.0,
-            max_position_hours: 4.0,
+            max_position_hours: 6.0, // Extended for momentum
             trade_size_usdc: 50.0,
             slippage_bps: 100, // 1%
             poll_interval_secs: 60,
@@ -321,6 +482,19 @@ impl Default for MemeOrchestratorConfig {
             min_ou_confidence: 0.3,
             min_half_life_minutes: 5.0,
             max_half_life_minutes: 120.0,
+            // Momentum defaults
+            momentum_enabled: false,
+            momentum_z_threshold: default_momentum_z(),
+            momentum_adx_entry_threshold: default_adx_entry(),
+            momentum_adx_exit_threshold: default_adx_exit(),
+            momentum_decay_hours: default_decay_hours(),
+            // Trailing TP defaults
+            use_trailing_tp: false,
+            trailing_activation_pct: default_trailing_activation(),
+            trailing_stop_pct: default_trailing_stop(),
+            // Timing & Risk defaults
+            cooldown_seconds: default_cooldown_seconds(),
+            max_daily_trades: default_max_daily_trades(),
         }
     }
 }
@@ -387,6 +561,12 @@ pub struct TokenTracker {
     pub price_history: Vec<f64>,
     /// Maximum history to keep
     pub max_history: usize,
+    /// Momentum ADX detector for trend confirmation
+    pub momentum_adx: MomentumAdxDetector,
+    /// Candle builder for ADX (5-minute candles)
+    pub candle_builder: CandleBuilder,
+    /// Previous ADX value for decay detection
+    pub prev_adx_value: Option<f64>,
 }
 
 impl TokenTracker {
@@ -397,6 +577,11 @@ impl TokenTracker {
             last_price_time: None,
             price_history: Vec::with_capacity(ou_lookback),
             max_history: ou_lookback * 2,
+            // Momentum ADX detector (meme-optimized: faster period)
+            momentum_adx: MomentumAdxDetector::meme_optimized(),
+            // 5-minute candles for ADX - reduces noise
+            candle_builder: CandleBuilder::five_minute(),
+            prev_adx_value: None,
         }
     }
 
@@ -413,6 +598,16 @@ impl TokenTracker {
         self.price_history.push(price);
         while self.price_history.len() > self.max_history {
             self.price_history.remove(0);
+        }
+
+        // Feed price to candle builder (5-min candles for ADX)
+        if let Some(candle) = self.candle_builder.update(price) {
+            // Store previous ADX for decay detection
+            if self.momentum_adx.is_valid() {
+                self.prev_adx_value = Some(self.momentum_adx.adx());
+            }
+            // Update ADX with completed candle
+            self.momentum_adx.update(&candle);
         }
 
         // Update OU process
@@ -464,6 +659,12 @@ pub struct MemeOrchestrator {
     is_running: Arc<RwLock<bool>>,
     /// Shutdown signal
     shutdown_requested: Arc<RwLock<bool>>,
+    /// Rug detector for token safety analysis
+    rug_detector: Arc<RwLock<RugDetector>>,
+    /// Liquidity guard for LP monitoring
+    liquidity_guard: Arc<RwLock<LiquidityGuard>>,
+    /// Honeypot detector for transfer restriction checks
+    honeypot_detector: Arc<dyn HoneypotDetector>,
 }
 
 impl MemeOrchestrator {
@@ -476,6 +677,11 @@ impl MemeOrchestrator {
     ) -> Result<Self, MemeOrchestratorError> {
         let balance_guard = BalanceGuard::new(wallet.pubkey());
 
+        // Initialize safety modules with graduated token settings (stricter than pump.fun)
+        let rug_detector = RugDetector::new();
+        let liquidity_guard = LiquidityGuard::graduated();
+        let honeypot_detector: Arc<dyn HoneypotDetector> = Arc::new(StubHoneypotDetector::new());
+
         Ok(Self {
             config,
             jupiter,
@@ -487,6 +693,9 @@ impl MemeOrchestrator {
             balance_guard: Arc::new(RwLock::new(balance_guard)),
             is_running: Arc::new(RwLock::new(false)),
             shutdown_requested: Arc::new(RwLock::new(false)),
+            rug_detector: Arc::new(RwLock::new(rug_detector)),
+            liquidity_guard: Arc::new(RwLock::new(liquidity_guard)),
+            honeypot_detector,
         })
     }
 
@@ -617,10 +826,159 @@ impl MemeOrchestrator {
         Ok(price)
     }
 
+    /// Check meme token safety before entry
+    ///
+    /// Performs safety checks using:
+    /// - RugDetector: Analyzes holder distribution, authorities, metadata
+    /// - LiquidityGuard: Monitors liquidity levels for rug risk
+    /// - HoneypotDetector: Checks for transfer restrictions (sell blocked)
+    ///
+    /// Returns true if the token passes safety checks.
+    pub async fn check_meme_safety(&self, mint: &str) -> Result<bool, MemeOrchestratorError> {
+        // Get token info for logging
+        let symbol = {
+            let tokens = self.tokens.read().await;
+            tokens.get(mint).map(|t| t.info.symbol.clone()).unwrap_or_else(|| mint[..8].to_string())
+        };
+
+        // =========================================================================
+        // 1. RUG DETECTOR CHECK
+        // =========================================================================
+        // Note: Full rug detection requires fetching token metadata, holder data,
+        // and liquidity info from chain. For now, we check cached reports or
+        // use analyze_with_partial_data. In production, expand this to fetch
+        // real data from Birdeye/Helius APIs.
+        let rug_detector = self.rug_detector.read().await;
+
+        // Check if we have a cached safety report
+        if let Some(cached_report) = rug_detector.get_cached(mint) {
+            if cached_report.risk_level.should_block() {
+                tracing::warn!(
+                    "Rug detector blocked {}: {:?} risk - {:?}",
+                    symbol,
+                    cached_report.risk_level,
+                    cached_report.warnings
+                );
+                return Ok(false);
+            }
+            if cached_report.risk_level.should_warn() {
+                tracing::warn!(
+                    "Rug detector warning for {}: {:?} risk - {:?}",
+                    symbol,
+                    cached_report.risk_level,
+                    cached_report.warnings
+                );
+                // Continue but with warning logged
+            }
+        }
+        drop(rug_detector);
+
+        // =========================================================================
+        // 2. LIQUIDITY GUARD CHECK
+        // =========================================================================
+        // Check minimum liquidity threshold
+        let tokens = self.tokens.read().await;
+        if let Some(tracker) = tokens.get(mint) {
+            // Use market cap as proxy for liquidity if available
+            if let Some(market_cap) = tracker.info.market_cap {
+                let liquidity_guard = self.liquidity_guard.read().await;
+                let min_liquidity = liquidity_guard.config().min_liquidity_usd;
+
+                // Market cap should be at least 10x the minimum liquidity for safety
+                if market_cap < min_liquidity * 10.0 {
+                    tracing::warn!(
+                        "Liquidity guard blocked {}: market cap ${:.0} < ${:.0} min (10x liquidity)",
+                        symbol,
+                        market_cap,
+                        min_liquidity * 10.0
+                    );
+                    return Ok(false);
+                }
+            }
+        }
+        drop(tokens);
+
+        // =========================================================================
+        // 3. HONEYPOT DETECTOR CHECK
+        // =========================================================================
+        // Check if token can be sold (not a honeypot)
+        // Note: StubHoneypotDetector always returns safe - replace with real
+        // implementation that checks Token-2022 extensions, transfer hooks, etc.
+        let mint_pubkey = match mint.parse::<solana_sdk::pubkey::Pubkey>() {
+            Ok(pk) => pk,
+            Err(_) => {
+                tracing::warn!("Invalid mint address for honeypot check: {}", mint);
+                return Ok(false);
+            }
+        };
+
+        match self.honeypot_detector.can_sell(&mint_pubkey).await {
+            Ok(can_sell) => {
+                if !can_sell {
+                    tracing::warn!(
+                        "Honeypot detector blocked {}: token cannot be sold",
+                        symbol
+                    );
+                    return Ok(false);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Honeypot check failed for {}: {:?} - proceeding with caution",
+                    symbol,
+                    e
+                );
+                // Don't block on honeypot check errors, but log warning
+            }
+        }
+
+        // Optional: Full honeypot analysis for additional checks
+        match self.honeypot_detector.analyze(&mint_pubkey).await {
+            Ok(analysis) => {
+                if analysis.risk_level.should_block() {
+                    tracing::warn!(
+                        "Honeypot analysis blocked {}: {:?} risk - {:?}",
+                        symbol,
+                        analysis.risk_level,
+                        analysis.issues
+                    );
+                    return Ok(false);
+                }
+                if analysis.risk_level.should_warn() {
+                    tracing::warn!(
+                        "Honeypot warning for {}: {:?} - {:?}",
+                        symbol,
+                        analysis.risk_level,
+                        analysis.issues
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::debug!("Honeypot analysis unavailable for {}: {:?}", symbol, e);
+            }
+        }
+
+        tracing::debug!("Safety checks passed for {}", symbol);
+        Ok(true)
+    }
+
     /// Check for entry signal on a specific token
+    ///
+    /// Entry logic depends on momentum_enabled config:
+    /// - Momentum mode: z > +threshold AND ADX > entry_threshold (BullishMomentum)
+    /// - Mean reversion mode: z < -threshold (oversold)
+    ///
+    /// NOTE: LONG-ONLY for meme tokens - Jupiter doesn't support shorting
     pub async fn check_entry_signal(&self, mint: &str) -> Result<bool, MemeOrchestratorError> {
         // Can only enter if no position open
         if self.active_position.read().await.is_some() {
+            return Ok(false);
+        }
+
+        // =========================================================================
+        // MEME SAFETY CHECK (before any technical analysis)
+        // =========================================================================
+        if !self.check_meme_safety(mint).await? {
             return Ok(false);
         }
 
@@ -634,12 +992,42 @@ impl MemeOrchestrator {
             return Ok(false);
         }
 
-        // Check OU signal
-        if let Some(z_score) = tracker.ou_process.current_z_score() {
-            // Entry on oversold (z < threshold, e.g., z < -3.5)
+        // Get z-score from OU process
+        let z_score = match tracker.ou_process.current_z_score() {
+            Some(z) => z,
+            None => return Ok(false),
+        };
+
+        if self.config.momentum_enabled {
+            // =========================================================================
+            // MOMENTUM ENTRY: z WITH trend + ADX confirmation
+            // NOTE: LONG-ONLY for meme tokens (Jupiter doesn't support shorting)
+            // =========================================================================
+            if z_score > self.config.momentum_z_threshold {
+                // Check ADX for trend confirmation
+                if let Some(signal) = tracker.momentum_adx.check_entry_signal() {
+                    if let MomentumSignal::BullishMomentum { adx, plus_di, minus_di } = signal {
+                        tracing::info!(
+                            "Momentum LONG signal for {}: z={:.2} > {:.2}, ADX={:.1} (+DI={:.1}, -DI={:.1})",
+                            tracker.info.symbol,
+                            z_score,
+                            self.config.momentum_z_threshold,
+                            adx,
+                            plus_di,
+                            minus_di
+                        );
+                        return Ok(true);
+                    }
+                    // BearishMomentum intentionally ignored - no shorting on meme coins
+                }
+            }
+        } else {
+            // =========================================================================
+            // MEAN REVERSION ENTRY: z < threshold (oversold)
+            // =========================================================================
             if z_score < self.config.z_entry_threshold {
                 tracing::info!(
-                    "Entry signal for {}: z={:.2} < {:.2}",
+                    "Mean reversion entry signal for {}: z={:.2} < {:.2}",
                     tracker.info.symbol,
                     z_score,
                     self.config.z_entry_threshold
@@ -652,6 +1040,15 @@ impl MemeOrchestrator {
     }
 
     /// Check for exit signal on current position
+    ///
+    /// Exit priority (first match wins):
+    /// 1. Stop loss (unchanged)
+    /// 2. Trailing stop (if activated)
+    /// 3. ADX trend dying (momentum mode: adx < exit_threshold)
+    /// 4. Momentum decay (after decay_hours: ADX falling)
+    /// 5. Fixed take profit (fallback if trailing not used)
+    /// 6. Time stop (max_position_hours)
+    /// 7. Z-score reversal (mean reversion mode)
     pub async fn check_exit_signal(&self) -> Result<bool, MemeOrchestratorError> {
         let position = match self.active_position.read().await.clone() {
             Some(p) => p,
@@ -666,7 +1063,9 @@ impl MemeOrchestrator {
             let pnl_pct = position.pnl_pct(current_price);
             let age_hours = position.age_seconds() as f64 / 3600.0;
 
-            // Check stop loss
+            // =========================================================================
+            // 1. STOP LOSS (always first priority)
+            // =========================================================================
             if pnl_pct <= -self.config.stop_loss_pct {
                 tracing::warn!(
                     "Stop loss triggered for {}: {:.2}%",
@@ -676,17 +1075,80 @@ impl MemeOrchestrator {
                 return Ok(true);
             }
 
-            // Check take profit
-            if pnl_pct >= self.config.take_profit_pct {
-                tracing::info!(
-                    "Take profit triggered for {}: {:.2}%",
-                    position.token_symbol,
-                    pnl_pct
-                );
-                return Ok(true);
+            // =========================================================================
+            // 2. TRAILING STOP (if enabled and activated)
+            // =========================================================================
+            if self.config.use_trailing_tp && position.trailing_activated {
+                if position.trailing_stop_triggered(current_price) {
+                    let drawdown = position.drawdown_from_high(current_price);
+                    tracing::info!(
+                        "Trailing stop triggered for {}: {:.2}% drawdown from high (price: ${:.4}, high: ${:.4})",
+                        position.token_symbol,
+                        drawdown,
+                        current_price,
+                        position.high_watermark_price
+                    );
+                    return Ok(true);
+                }
             }
 
-            // Check time stop
+            // =========================================================================
+            // 3. ADX TREND DYING (momentum mode only)
+            // =========================================================================
+            if self.config.momentum_enabled && position.is_momentum_trade {
+                let adx = tracker.momentum_adx.adx();
+                if tracker.momentum_adx.is_valid() && adx < self.config.momentum_adx_exit_threshold {
+                    tracing::info!(
+                        "ADX trend dying for {}: ADX={:.1} < {:.1}",
+                        position.token_symbol,
+                        adx,
+                        self.config.momentum_adx_exit_threshold
+                    );
+                    return Ok(true);
+                }
+            }
+
+            // =========================================================================
+            // 4. MOMENTUM DECAY (after decay_hours, exit if ADX falling)
+            // =========================================================================
+            if self.config.momentum_enabled && position.is_momentum_trade {
+                if age_hours >= self.config.momentum_decay_hours {
+                    // Check if ADX is falling (momentum decay)
+                    if let Some(prev_adx) = tracker.prev_adx_value {
+                        let current_adx = tracker.momentum_adx.adx();
+                        let adx_falling = current_adx < prev_adx;
+                        // Exit if ADX is falling but still above exit threshold (decay, not death)
+                        if adx_falling && current_adx > self.config.momentum_adx_exit_threshold {
+                            tracing::info!(
+                                "Momentum decay exit for {}: ADX falling {:.1} -> {:.1} after {:.1}h",
+                                position.token_symbol,
+                                prev_adx,
+                                current_adx,
+                                age_hours
+                            );
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+
+            // =========================================================================
+            // 5. FIXED TAKE PROFIT (fallback if trailing TP not used)
+            // =========================================================================
+            if !self.config.use_trailing_tp {
+                if pnl_pct >= self.config.take_profit_pct {
+                    tracing::info!(
+                        "Take profit triggered for {}: {:.2}%",
+                        position.token_symbol,
+                        pnl_pct
+                    );
+                    return Ok(true);
+                }
+            }
+
+            // =========================================================================
+            // 6. TIME STOP (max position hours)
+            // =========================================================================
             if age_hours >= self.config.max_position_hours {
                 tracing::info!(
                     "Time stop triggered for {}: {:.1}h",
@@ -696,15 +1158,19 @@ impl MemeOrchestrator {
                 return Ok(true);
             }
 
-            // Check z-score mean reversion exit
-            if let Some(z_score) = tracker.ou_process.current_z_score() {
-                if z_score >= self.config.z_exit_threshold {
-                    tracing::info!(
-                        "Mean reversion exit for {}: z={:.2}",
-                        position.token_symbol,
-                        z_score
-                    );
-                    return Ok(true);
+            // =========================================================================
+            // 7. Z-SCORE REVERSAL (mean reversion mode only)
+            // =========================================================================
+            if !self.config.momentum_enabled {
+                if let Some(z_score) = tracker.ou_process.current_z_score() {
+                    if z_score >= self.config.z_exit_threshold {
+                        tracing::info!(
+                            "Mean reversion exit for {}: z={:.2}",
+                            position.token_symbol,
+                            z_score
+                        );
+                        return Ok(true);
+                    }
                 }
             }
         } else {
@@ -744,7 +1210,7 @@ impl MemeOrchestrator {
             ));
         }
 
-        let (tracker_info, z_score, ou_params) = {
+        let (tracker_info, z_score, ou_params, entry_adx) = {
             let tokens = self.tokens.read().await;
             let tracker = tokens
                 .get(mint)
@@ -753,6 +1219,11 @@ impl MemeOrchestrator {
                 tracker.info.clone(),
                 tracker.ou_process.current_z_score().unwrap_or(0.0),
                 tracker.ou_process.params().cloned(),
+                if tracker.momentum_adx.is_valid() {
+                    Some(tracker.momentum_adx.adx())
+                } else {
+                    None
+                },
             )
         };
 
@@ -762,23 +1233,51 @@ impl MemeOrchestrator {
             let size = ((self.config.trade_size_usdc / price)
                 * 10f64.powi(tracker_info.decimals as i32)) as u64;
 
-            let position = ActivePosition::new(
-                mint.to_string(),
-                tracker_info.symbol.clone(),
-                price,
-                size,
-                self.config.trade_size_usdc,
-                z_score,
-                ou_params,
-            );
+            let position = if self.config.momentum_enabled {
+                // Momentum trade with ADX and trailing TP config
+                ActivePosition::new_momentum(
+                    mint.to_string(),
+                    tracker_info.symbol.clone(),
+                    price,
+                    size,
+                    self.config.trade_size_usdc,
+                    z_score,
+                    ou_params,
+                    entry_adx.unwrap_or(0.0),
+                    self.config.trailing_activation_pct,
+                    self.config.trailing_stop_pct,
+                )
+            } else {
+                // Mean reversion trade
+                ActivePosition::new(
+                    mint.to_string(),
+                    tracker_info.symbol.clone(),
+                    price,
+                    size,
+                    self.config.trade_size_usdc,
+                    z_score,
+                    ou_params,
+                )
+            };
 
-            tracing::info!(
-                "PAPER ENTRY: {} {} at ${:.8} (z={:.2})",
-                tracker_info.symbol,
-                size,
-                price,
-                z_score
-            );
+            if self.config.momentum_enabled {
+                tracing::info!(
+                    "PAPER MOMENTUM ENTRY: {} {} at ${:.8} (z={:.2}, ADX={:.1})",
+                    tracker_info.symbol,
+                    size,
+                    price,
+                    z_score,
+                    entry_adx.unwrap_or(0.0)
+                );
+            } else {
+                tracing::info!(
+                    "PAPER ENTRY: {} {} at ${:.8} (z={:.2})",
+                    tracker_info.symbol,
+                    size,
+                    price,
+                    z_score
+                );
+            }
 
             *self.active_position.write().await = Some(position.clone());
             self.persist_state().await?;
@@ -847,15 +1346,32 @@ impl MemeOrchestrator {
         let price = self.config.trade_size_usdc
             / (output_amount as f64 / 10f64.powi(tracker_info.decimals as i32));
 
-        let position = ActivePosition::new(
-            mint.to_string(),
-            tracker_info.symbol.clone(),
-            price,
-            output_amount,
-            self.config.trade_size_usdc,
-            z_score,
-            ou_params,
-        );
+        let position = if self.config.momentum_enabled {
+            // Momentum trade with ADX and trailing TP config
+            ActivePosition::new_momentum(
+                mint.to_string(),
+                tracker_info.symbol.clone(),
+                price,
+                output_amount,
+                self.config.trade_size_usdc,
+                z_score,
+                ou_params,
+                entry_adx.unwrap_or(0.0),
+                self.config.trailing_activation_pct,
+                self.config.trailing_stop_pct,
+            )
+        } else {
+            // Mean reversion trade
+            ActivePosition::new(
+                mint.to_string(),
+                tracker_info.symbol.clone(),
+                price,
+                output_amount,
+                self.config.trade_size_usdc,
+                z_score,
+                ou_params,
+            )
+        };
 
         // Validate post-trade balance (fees only, we're spending USDC not SOL)
         let post_balance = self
@@ -1090,6 +1606,44 @@ impl MemeOrchestrator {
                 Err(e) => {
                     tracing::warn!("Failed to fetch price for {}: {}", mint, e);
                 }
+            }
+        }
+
+        // Update position high watermark for trailing TP (if position open)
+        if self.config.use_trailing_tp {
+            if let Some(mut position) = self.active_position.write().await.take() {
+                let tokens = self.tokens.read().await;
+                if let Some(tracker) = tokens.get(&position.token_mint) {
+                    if let Some(current_price) = tracker.info.price_usdc {
+                        // Update high watermark and check for activation
+                        let old_watermark = position.high_watermark_price;
+                        let was_activated = position.trailing_activated;
+                        position.update_price(current_price);
+
+                        // Log trailing TP activation
+                        if !was_activated && position.trailing_activated {
+                            let pnl = position.pnl_pct(current_price);
+                            tracing::info!(
+                                "Trailing TP activated for {}: {:.2}% profit reached (threshold: {:.1}%)",
+                                position.token_symbol,
+                                pnl,
+                                self.config.trailing_activation_pct
+                            );
+                        }
+
+                        // Log new high watermark
+                        if position.high_watermark_price > old_watermark && position.trailing_activated {
+                            tracing::debug!(
+                                "New high watermark for {}: ${:.8} (prev: ${:.8})",
+                                position.token_symbol,
+                                position.high_watermark_price,
+                                old_watermark
+                            );
+                        }
+                    }
+                }
+                drop(tokens);
+                *self.active_position.write().await = Some(position);
             }
         }
 

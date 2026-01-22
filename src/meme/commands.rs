@@ -291,6 +291,19 @@ async fn meme_run_command(cmd: MemeRunCmd) -> Result<()> {
         min_ou_confidence: config.meme.as_ref().map(|m| m.min_ou_confidence).unwrap_or(0.3),
         min_half_life_minutes: config.meme.as_ref().map(|m| m.min_half_life_minutes).unwrap_or(5.0),
         max_half_life_minutes: config.meme.as_ref().map(|m| m.max_half_life_minutes).unwrap_or(120.0),
+        // Momentum strategy parameters
+        momentum_enabled: config.meme.as_ref().map(|m| m.momentum_enabled).unwrap_or(true),
+        momentum_z_threshold: config.meme.as_ref().map(|m| m.momentum_z_threshold).unwrap_or(1.5),
+        momentum_adx_entry_threshold: config.meme.as_ref().map(|m| m.momentum_adx_entry_threshold).unwrap_or(25.0),
+        momentum_adx_exit_threshold: config.meme.as_ref().map(|m| m.momentum_adx_exit_threshold).unwrap_or(20.0),
+        momentum_decay_hours: config.meme.as_ref().map(|m| m.momentum_decay_hours).unwrap_or(4.0),
+        // Trailing take profit parameters
+        use_trailing_tp: config.meme.as_ref().map(|m| m.use_trailing_tp).unwrap_or(true),
+        trailing_activation_pct: config.meme.as_ref().map(|m| m.trailing_activation_pct).unwrap_or(10.0),
+        trailing_stop_pct: config.meme.as_ref().map(|m| m.trailing_stop_pct).unwrap_or(5.0),
+        // Timing parameters
+        cooldown_seconds: config.meme.as_ref().map(|m| m.cooldown_seconds).unwrap_or(300),
+        max_daily_trades: config.meme.as_ref().map(|m| m.max_daily_trades).unwrap_or(10),
     };
 
     // Validate config
