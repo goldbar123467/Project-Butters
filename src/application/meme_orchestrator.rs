@@ -21,14 +21,22 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::adapters::jupiter::{JupiterClient, QuoteRequest, SwapRequest};
 use crate::adapters::solana::{SolanaClient, WalletManager};
+use crate::adapters::pump_fun::{BondingCurveState, PumpFunTokenState};
+use crate::adapters::market_data::JupiterPriceClient;
 use crate::domain::{BalanceGuard, ExpectedDelta};
 use crate::strategy::ou_process::{OUProcess, OUSignal, OUParams};
 
 /// USDC mint address on Solana
 pub const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
+/// Wrapped SOL mint address
+pub const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
+
 /// Default position persistence file
 pub const POSITION_FILE: &str = "meme_position.json";
+
+/// SOL/USDC price cache TTL in seconds
+pub const SOL_PRICE_CACHE_TTL_SECS: u64 = 30;
 
 /// Minimum SOL balance to keep for transaction fees
 pub const MIN_SOL_RESERVE_LAMPORTS: u64 = 50_000_000; // 0.05 SOL
@@ -328,6 +336,8 @@ pub struct TokenTracker {
     pub price_history: Vec<f64>,
     /// Maximum history to keep
     pub max_history: usize,
+    /// Pump.fun bonding curve state (if token is from pump.fun)
+    pub pump_fun_state: Option<PumpFunTokenState>,
 }
 
 impl TokenTracker {
@@ -338,7 +348,41 @@ impl TokenTracker {
             last_price_time: None,
             price_history: Vec::with_capacity(ou_lookback),
             max_history: ou_lookback * 2,
+            pump_fun_state: None,
         }
+    }
+
+    /// Create a new tracker with pump.fun bonding curve state
+    pub fn with_pump_fun(
+        info: TokenInfo,
+        ou_lookback: usize,
+        ou_dt_minutes: f64,
+        bonding_curve: BondingCurveState,
+    ) -> Self {
+        Self {
+            info,
+            ou_process: OUProcess::new(ou_lookback, ou_dt_minutes),
+            last_price_time: None,
+            price_history: Vec::with_capacity(ou_lookback),
+            max_history: ou_lookback * 2,
+            pump_fun_state: Some(PumpFunTokenState::new(bonding_curve)),
+        }
+    }
+
+    /// Check if this is a pump.fun token still on the bonding curve
+    pub fn is_pump_fun_pre_graduation(&self) -> bool {
+        self.pump_fun_state
+            .as_ref()
+            .map(|s| s.is_on_bonding_curve())
+            .unwrap_or(false)
+    }
+
+    /// Get the pump.fun price in SOL if available
+    pub fn pump_fun_price_sol(&self) -> Option<f64> {
+        self.pump_fun_state
+            .as_ref()
+            .filter(|s| s.is_on_bonding_curve())
+            .map(|s| s.price_sol)
     }
 
     /// Update with new price, returns OU signal
@@ -383,12 +427,20 @@ impl TokenTracker {
     }
 }
 
+/// Cached SOL/USDC price with timestamp
+struct SolPriceCache {
+    price: f64,
+    timestamp: Instant,
+}
+
 /// Meme coin trading orchestrator
 pub struct MemeOrchestrator {
     /// Configuration
     config: MemeOrchestratorConfig,
     /// Jupiter client for swaps
     jupiter: JupiterClient,
+    /// Jupiter price client for SOL/USDC
+    price_client: JupiterPriceClient,
     /// Solana RPC client
     solana: SolanaClient,
     /// Wallet manager
@@ -405,6 +457,8 @@ pub struct MemeOrchestrator {
     is_running: Arc<RwLock<bool>>,
     /// Shutdown signal
     shutdown_requested: Arc<RwLock<bool>>,
+    /// Cached SOL/USDC price
+    sol_price_cache: Arc<RwLock<Option<SolPriceCache>>>,
 }
 
 impl MemeOrchestrator {
@@ -416,10 +470,13 @@ impl MemeOrchestrator {
         wallet: WalletManager,
     ) -> Result<Self, MemeOrchestratorError> {
         let balance_guard = BalanceGuard::new(wallet.pubkey());
+        let price_client = JupiterPriceClient::new()
+            .map_err(|e| MemeOrchestratorError::MarketDataError(e.to_string()))?;
 
         Ok(Self {
             config,
             jupiter,
+            price_client,
             solana,
             wallet: wallet.clone(),
             tokens: Arc::new(RwLock::new(HashMap::new())),
@@ -428,6 +485,7 @@ impl MemeOrchestrator {
             balance_guard: Arc::new(RwLock::new(balance_guard)),
             is_running: Arc::new(RwLock::new(false)),
             shutdown_requested: Arc::new(RwLock::new(false)),
+            sol_price_cache: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -486,6 +544,94 @@ impl MemeOrchestrator {
         tracing::info!("Added token: {} ({})", info.symbol, info.mint);
     }
 
+    /// Add a pump.fun token with bonding curve state
+    pub async fn add_pump_token(&self, info: TokenInfo, bonding_curve: BondingCurveState) {
+        let tracker = TokenTracker::with_pump_fun(
+            info.clone(),
+            self.config.ou_lookback,
+            self.config.ou_dt_minutes,
+            bonding_curve.clone(),
+        );
+
+        let price_sol = tracker.pump_fun_price_sol().unwrap_or(0.0);
+        let grad_progress = bonding_curve.graduation_progress();
+
+        self.tokens.write().await.insert(info.mint.clone(), tracker);
+
+        tracing::info!(
+            "Added pump.fun token: {} ({}) - price: {} SOL, graduation: {:.1}%",
+            info.symbol,
+            info.mint,
+            price_sol,
+            grad_progress
+        );
+    }
+
+    /// Update pump.fun state from a trade event
+    ///
+    /// Call this when receiving trade events from pump.fun WebSocket
+    pub async fn update_pump_state(
+        &self,
+        mint: &str,
+        virtual_sol_reserves: u64,
+        virtual_token_reserves: u64,
+        is_complete: bool,
+        trade_ts: u64,
+    ) -> Result<(), MemeOrchestratorError> {
+        let mut tokens = self.tokens.write().await;
+        let tracker = tokens
+            .get_mut(mint)
+            .ok_or_else(|| MemeOrchestratorError::TokenNotFound(mint.to_string()))?;
+
+        if let Some(ref mut pump_state) = tracker.pump_fun_state {
+            let old_price = pump_state.price_sol;
+            pump_state.update_from_trade(
+                virtual_sol_reserves,
+                virtual_token_reserves,
+                is_complete,
+                trade_ts,
+            );
+            let new_price = pump_state.price_sol;
+
+            tracing::debug!(
+                "Updated pump.fun state for {}: {} SOL -> {} SOL (grad: {:.1}%)",
+                tracker.info.symbol,
+                old_price,
+                new_price,
+                pump_state.bonding_curve.graduation_progress()
+            );
+
+            // If graduated, log it
+            if is_complete && !pump_state.bonding_curve.complete {
+                tracing::info!(
+                    "Token {} graduated from pump.fun! Switching to Jupiter pricing.",
+                    tracker.info.symbol
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if a token is a pump.fun pre-graduation token
+    pub async fn is_pump_fun_pre_graduation(&self, mint: &str) -> bool {
+        let tokens = self.tokens.read().await;
+        tokens
+            .get(mint)
+            .map(|t| t.is_pump_fun_pre_graduation())
+            .unwrap_or(false)
+    }
+
+    /// Get pump.fun graduation progress for a token (0-100%)
+    pub async fn get_pump_graduation_progress(&self, mint: &str) -> Option<f64> {
+        let tokens = self.tokens.read().await;
+        tokens.get(mint).and_then(|t| {
+            t.pump_fun_state
+                .as_ref()
+                .map(|s| s.bonding_curve.graduation_progress())
+        })
+    }
+
     /// Remove a token from tracking
     pub async fn remove_token(&self, mint: &str) {
         self.tokens.write().await.remove(mint);
@@ -525,19 +671,51 @@ impl MemeOrchestrator {
         }
     }
 
-    /// Fetch price for a token using Jupiter quote
+    /// Fetch price for a token
+    ///
+    /// For pump.fun tokens still on the bonding curve, uses the bonding curve price.
+    /// For graduated tokens or non-pump.fun tokens, uses Jupiter quote.
     pub async fn fetch_token_price(&self, mint: &str) -> Result<f64, MemeOrchestratorError> {
-        // Quote 1 unit of token to USDC
-        let tracker = {
+        // Extract what we need from the tracker
+        let (info, pump_state) = {
             let tokens = self.tokens.read().await;
-            tokens
+            let tracker = tokens
                 .get(mint)
-                .ok_or_else(|| MemeOrchestratorError::TokenNotFound(mint.to_string()))?
-                .info
-                .clone()
+                .ok_or_else(|| MemeOrchestratorError::TokenNotFound(mint.to_string()))?;
+            (tracker.info.clone(), tracker.pump_fun_state.clone())
         };
 
-        let amount = 10u64.pow(tracker.decimals as u32); // 1 token
+        // Check if this is a pump.fun token still on the bonding curve
+        if let Some(ref pump_state) = pump_state {
+            if pump_state.is_on_bonding_curve() {
+                // Use bonding curve price
+                let price_sol = pump_state.price_sol;
+                let sol_usdc = self.get_sol_usdc_price().await?;
+                let price_usdc = price_sol * sol_usdc;
+
+                tracing::debug!(
+                    "Pump.fun bonding curve price for {}: {} SOL = ${:.10} (grad: {:.1}%)",
+                    info.symbol,
+                    price_sol,
+                    price_usdc,
+                    pump_state.bonding_curve.graduation_progress()
+                );
+
+                return Ok(price_usdc);
+            }
+        }
+
+        // Fall back to Jupiter Quote API
+        self.fetch_jupiter_price(mint, &info).await
+    }
+
+    /// Fetch price using Jupiter quote (for graduated or non-pump.fun tokens)
+    async fn fetch_jupiter_price(
+        &self,
+        mint: &str,
+        info: &TokenInfo,
+    ) -> Result<f64, MemeOrchestratorError> {
+        let amount = 10u64.pow(info.decimals as u32); // 1 token
 
         let quote_request = QuoteRequest::new(
             mint.to_string(),
@@ -555,6 +733,40 @@ impl MemeOrchestrator {
         // USDC has 6 decimals
         let price = quote.output_amount() as f64 / 1_000_000.0;
 
+        Ok(price)
+    }
+
+    /// Get SOL/USDC price with caching
+    ///
+    /// Caches the price for SOL_PRICE_CACHE_TTL_SECS to avoid excessive API calls.
+    pub async fn get_sol_usdc_price(&self) -> Result<f64, MemeOrchestratorError> {
+        // Check cache first
+        {
+            let cache = self.sol_price_cache.read().await;
+            if let Some(ref cached) = *cache {
+                if cached.timestamp.elapsed() < Duration::from_secs(SOL_PRICE_CACHE_TTL_SECS) {
+                    return Ok(cached.price);
+                }
+            }
+        }
+
+        // Fetch fresh price
+        let price = self
+            .price_client
+            .get_price(WSOL_MINT)
+            .await
+            .map_err(|e| MemeOrchestratorError::MarketDataError(e.to_string()))?;
+
+        // Update cache
+        {
+            let mut cache = self.sol_price_cache.write().await;
+            *cache = Some(SolPriceCache {
+                price,
+                timestamp: Instant::now(),
+            });
+        }
+
+        tracing::debug!("Updated SOL/USDC price: ${:.2}", price);
         Ok(price)
     }
 
@@ -1196,6 +1408,35 @@ mod tests {
         let tracker = TokenTracker::new(info.clone(), 100, 1.0);
         assert_eq!(tracker.info.symbol, "TEST");
         assert!(!tracker.ou_process.is_ready());
+        assert!(tracker.pump_fun_state.is_none());
+    }
+
+    #[test]
+    fn test_token_tracker_with_pump_fun() {
+        use crate::adapters::pump_fun::BondingCurveState;
+
+        let info = create_test_token_info();
+        let bonding_curve = BondingCurveState::new("TestMint123".to_string());
+        let tracker = TokenTracker::with_pump_fun(info, 100, 1.0, bonding_curve);
+
+        assert!(tracker.pump_fun_state.is_some());
+        assert!(tracker.is_pump_fun_pre_graduation());
+        assert!(tracker.pump_fun_price_sol().is_some());
+    }
+
+    #[test]
+    fn test_token_tracker_pump_fun_graduation() {
+        use crate::adapters::pump_fun::BondingCurveState;
+
+        let info = create_test_token_info();
+        let mut bonding_curve = BondingCurveState::new("TestMint123".to_string());
+        bonding_curve.complete = true; // Graduated
+
+        let tracker = TokenTracker::with_pump_fun(info, 100, 1.0, bonding_curve);
+
+        assert!(tracker.pump_fun_state.is_some());
+        assert!(!tracker.is_pump_fun_pre_graduation()); // Not pre-graduation
+        assert!(tracker.pump_fun_price_sol().is_none()); // No bonding curve price
     }
 
     #[test]
