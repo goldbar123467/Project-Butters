@@ -23,8 +23,9 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::adapters::jupiter::{JupiterClient, QuoteRequest, SwapRequest};
 use crate::adapters::solana::{SolanaClient, WalletManager};
+use crate::adapters::honeypot::SolanaHoneypotDetector;
 use crate::domain::{BalanceGuard, ExpectedDelta};
-use crate::domain::honeypot_detector::{HoneypotDetector, HoneypotRisk, StubHoneypotDetector};
+use crate::domain::honeypot_detector::{HoneypotDetector, HoneypotRisk};
 use crate::domain::liquidity_guard::{LiquidityGuard, LiquidityGuardConfig, LiquidityTrend};
 use crate::domain::rug_detector::{RugDetector, RugDetectorConfig, RiskLevel, TokenSafetyReport};
 use crate::strategy::ou_process::{OUProcess, OUSignal, OUParams};
@@ -680,7 +681,12 @@ impl MemeOrchestrator {
         // Initialize safety modules with graduated token settings (stricter than pump.fun)
         let rug_detector = RugDetector::new();
         let liquidity_guard = LiquidityGuard::graduated();
-        let honeypot_detector: Arc<dyn HoneypotDetector> = Arc::new(StubHoneypotDetector::new());
+
+        // Production honeypot detector with Token-2022 extension analysis and sell simulation
+        // Replaces StubHoneypotDetector which always returned safe
+        let honeypot_detector: Arc<dyn HoneypotDetector> = Arc::new(
+            SolanaHoneypotDetector::new(solana.clone(), jupiter.clone()),
+        );
 
         Ok(Self {
             config,

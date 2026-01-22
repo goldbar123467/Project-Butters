@@ -8,6 +8,7 @@
 //! - Jito: MEV-protected bundle submission
 //! - Token Metadata: Mint authority, freeze authority, supply info
 //! - Pump.fun: Real-time token launch monitoring via WebSocket
+//! - Honeypot: Token-2022 extension analysis and sell simulation
 
 pub mod jupiter;
 pub mod solana;
@@ -16,4 +17,5 @@ pub mod market_data;
 pub mod jito;
 pub mod token_metadata;
 pub mod pump_fun;
+pub mod honeypot;
 

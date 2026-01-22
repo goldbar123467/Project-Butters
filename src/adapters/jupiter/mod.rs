@@ -10,7 +10,7 @@ mod swap;
 mod token_list;
 
 pub use client::JupiterClient;
-pub use quote::QuoteRequest;
+pub use quote::{QuoteRequest, QuoteResponse};
 pub use swap::SwapRequest;
 pub use token_list::{
     JupiterToken, JupiterTokenFetcher,
